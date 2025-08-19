@@ -2,6 +2,12 @@
 """
 query_sdrwatch.py — quick CLI to inspect an SDRWatch SQLite database
 
+Updated to match the upgraded sdrwatch schema:
+- scans table now uses columns: fft, avg (not fft_size)
+- fields kept: t_start_utc, t_end_utc, f_start_hz, f_stop_hz, step_hz, samp_rate, driver, device
+- detections: f_low_hz, f_center_hz, f_high_hz, peak_db, noise_db, snr_db, service, region, notes
+- baseline: bin_hz, ema_occ, ema_power_db, last_seen_utc, total_obs, hits
+
 No external dependencies. Prints tidy tables to stdout and supports CSV export.
 
 Usage examples:
@@ -33,10 +39,7 @@ import csv
 import os
 import sqlite3
 import sys
-from datetime import datetime
-from typing import Any, Iterable, List, Optional, Sequence, Tuple
-
-ISO_FMT = "%Y-%m-%dT%H:%M:%S"
+from typing import Any, Optional, Sequence, Tuple, List
 
 # ----------------------------
 # Helpers
@@ -65,7 +68,7 @@ def fmt_table(rows, headers=None, max_width=28):
     def get_val(r, k):
         try:
             return r[k]
-        except (KeyError, IndexError, TypeError):
+        except Exception:
             return ""
 
     data = [[str(get_val(r, c)) for c in cols] for r in rows]
@@ -80,7 +83,7 @@ def fmt_table(rows, headers=None, max_width=28):
     widths = [max(len(str(h)), max(len(str(row[i])) for row in data)) for i, h in enumerate(cols)]
     sep = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
     out = [sep]
-    out.append("| " + " | ".join(h.ljust(widths[i]) for i, h in enumerate(cols)) + " |")
+    out.append("| " + " | ".join(str(h).ljust(widths[i]) for i, h in enumerate(cols)) + " |")
     out.append(sep)
     for row in data:
         out.append("| " + " | ".join(str(row[i]).ljust(widths[i]) for i in range(len(cols))) + " |")
@@ -102,7 +105,6 @@ def between_clause(col: str, lo: Optional[int], hi: Optional[int]) -> Tuple[str,
     else:
         return "", []
 
-
 # ----------------------------
 # Commands
 # ----------------------------
@@ -112,7 +114,8 @@ def cmd_scans(con: sqlite3.Connection, args: argparse.Namespace) -> None:
         "SELECT id, t_start_utc, t_end_utc, "
         "ROUND(f_start_hz/1e6, 6) AS f_start_MHz, "
         "ROUND(f_stop_hz/1e6, 6) AS f_stop_MHz, "
-        "ROUND(step_hz/1e6, 6) AS step_MHz, samp_rate, fft_size, avg, driver, device "
+        "ROUND(step_hz/1e6, 6) AS step_MHz, "
+        "samp_rate AS samp_rate_Hz, fft AS fft, avg AS avg, driver, device "
         "FROM scans ORDER BY id DESC LIMIT ?"
     )
     rows = con.execute(q, (args.limit,)).fetchall()
@@ -152,7 +155,6 @@ def cmd_detections(con: sqlite3.Connection, args: argparse.Namespace) -> None:
         params.append(f"%{args.region}%")
 
     if args.since:
-        # Accept ISO 8601 or date prefix
         where.append("time_utc >= ?")
         params.append(args.since)
 
@@ -197,8 +199,12 @@ def cmd_baseline(con: sqlite3.Connection, args: argparse.Namespace) -> None:
     if args.center is not None:
         span_hz = int((args.span_khz or 100) * 1e3)
         c_hz = to_hz(args.center)
-        lo_hz = c_hz - span_hz
-        hi_hz = c_hz + span_hz
+        if c_hz is not None:
+            lo_hz = c_hz - span_hz
+            hi_hz = c_hz + span_hz
+        else:
+            lo_hz = None
+            hi_hz = None
     else:
         lo_hz = to_hz(args.mhz_min) if args.mhz_min is not None else None
         hi_hz = to_hz(args.mhz_max) if args.mhz_max is not None else None
@@ -236,27 +242,29 @@ def cmd_summary(con: sqlite3.Connection, args: argparse.Namespace) -> None:
     total_bins = con.execute("SELECT COUNT(*) FROM baseline").fetchone()[0]
 
     latest = con.execute(
-        "SELECT id, t_start_utc, t_end_utc, ROUND(f_start_hz/1e6,3), ROUND(f_stop_hz/1e6,3) FROM scans ORDER BY id DESC LIMIT 1"
+        "SELECT id, t_start_utc, t_end_utc, ROUND(f_start_hz/1e6,3), ROUND(f_stop_hz/1e6,3), fft, avg, samp_rate "
+        "FROM scans ORDER BY id DESC LIMIT 1"
     ).fetchone()
 
     by_service = con.execute(
-        "SELECT COALESCE(NULLIF(service,''),'(unknown)') AS service, COUNT(*) AS n "
+        "SELECT COALESCE(NULLIF(service,''),'(unknown)') AS service, COUNT(*) AS count "
         "FROM detections GROUP BY COALESCE(NULLIF(service,''),'(unknown)') "
-        "ORDER BY n DESC LIMIT 10"
+        "ORDER BY count DESC LIMIT 10"
     ).fetchall()
 
     print("== Overview ==")
     print(f"scans: {total_scans}  detections: {total_det}  baseline bins: {total_bins}")
     if latest:
         print(
-            f"latest scan id={latest[0]}  {latest[1]} → {latest[2]}  range={latest[3]}–{latest[4]} MHz"
+            f"latest scan id={latest[0]}  {latest[1]} → {latest[2]}  range={latest[3]}–{latest[4]} MHz  "
+            f"fft={latest[5]} avg={latest[6]} samp_rate={latest[7]} Hz"
         )
     print()
     print("== Top services ==")
     print(fmt_table(by_service, headers=["service", "count"]))
 
     snr_hist = con.execute(
-        "SELECT CAST((snr_db/3) AS INT)*3 AS bucket, COUNT(*) AS n FROM detections GROUP BY bucket ORDER BY bucket"
+        "SELECT CAST((snr_db/3) AS INT)*3 AS snr_dB_bucket, COUNT(*) AS count FROM detections GROUP BY snr_dB_bucket ORDER BY snr_dB_bucket"
     ).fetchall()
     if snr_hist:
         print()
@@ -278,9 +286,7 @@ def cmd_export(con: sqlite3.Connection, args: argparse.Namespace) -> None:
         limit=args.limit,
         csv=True,
     )
-    # Capture stdout to file
     with open(args.outfile, "w", newline="", encoding="utf-8") as f:
-        # Temporarily redirect stdout
         old = sys.stdout
         sys.stdout = f
         try:
@@ -288,7 +294,6 @@ def cmd_export(con: sqlite3.Connection, args: argparse.Namespace) -> None:
         finally:
             sys.stdout = old
     print(f"wrote {args.outfile}")
-
 
 # ----------------------------
 # Main
