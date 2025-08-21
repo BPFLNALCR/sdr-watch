@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 """
-SDRwatch Web (simple, no Jinja macros/blocks)
-Schema expected:
-  scans(id, t_start_utc, t_end_utc, f_start_hz, f_stop_hz, step_hz, samp_rate, fft, avg, device, driver)
-  detections(scan_id, time_utc, f_center_hz, f_low_hz, f_high_hz, peak_db, noise_db, snr_db, service, region, notes)
-  baseline(bin_hz, ema_occ, ema_power_db, last_seen_utc, total_obs, hits)
+SDRwatch Web (simple)
 Run:
   python3 sdrwatch-web-simple.py --db sdrwatch.db --host 0.0.0.0 --port 8080
 """
@@ -12,6 +8,9 @@ from __future__ import annotations
 import argparse, os, io, sqlite3, math
 from typing import Any, Dict, List, Optional, Tuple
 from flask import Flask, request, Response, render_template_string  # type: ignore
+
+# Fixed bar area height (px) so bars render even if Tailwind is missing
+CHART_HEIGHT_PX = 160
 
 HTML = r"""
 <!doctype html>
@@ -29,8 +28,8 @@ HTML = r"""
     .input { padding:.5rem .75rem; border-radius:.75rem; border:1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.05); color:#e2e8f0 }
     .table { width:100%; font-size:.9rem }
     .th,.td { padding:.5rem .75rem; text-align:left; border-bottom:1px solid rgba(255,255,255,.1) }
-    .bar { background:#0ea5e9; } /* sky-500 */
-    .muted { color:#94a3b8 } /* slate-400 */
+    .bar { background:#0ea5e9; } /* fallback if Tailwind isn't applied */
+    .muted { color:#94a3b8 }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen">
@@ -45,8 +44,10 @@ HTML = r"""
     </nav>
   </div>
 </header>
+
 <main class="max-w-7xl mx-auto px-4 py-6">
 {% if page == 'dashboard' %}
+
   <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
     <div class="stat"><div class="text-xs uppercase muted">Scans</div><div class="text-2xl font-semibold">{{ scans_total }}</div></div>
     <div class="stat"><div class="text-xs uppercase muted">Detections</div><div class="text-2xl font-semibold">{{ detections_total }}</div></div>
@@ -66,7 +67,6 @@ HTML = r"""
         <h2 class="text-lg font-semibold">SNR distribution</h2>
         <a href="/detections" class="underline">View detections »</a>
       </div>
-
       {% if snr_stats and snr_hist %}
       <div class="text-xs muted mb-2 flex flex-wrap gap-4">
         <div><span class="muted">Count:</span> {{ snr_stats.count }}</div>
@@ -75,13 +75,10 @@ HTML = r"""
         <div><span class="muted">Max:</span> {{ '%.1f' % snr_stats.p100 }} dB</div>
         <div><span class="muted">Bucket:</span> {{ snr_bucket_db }} dB</div>
       </div>
-
-      {% set maxc = snr_hist | map(attribute='count') | max %}
-      <div class="flex gap-1 items-end h-40">
+      <div class="flex gap-1 items-end" style="height: {{ chart_px }}px">
         {% for b in snr_hist %}
-          {% set h = (b.count / maxc * 100) if maxc > 0 else 0 %}
           <div class="flex flex-col items-center" title="{{ b.count }} detections">
-            <div class="w-6 bar rounded-t" style="height: {{ '%.1f' % h }}%"></div>
+            <div class="w-6 bar rounded-t" style="height: {{ b.height_px }}px; background: #0ea5e9;"></div>
             <div class="text-[10px] muted rotate-45 origin-top-left -mt-1">{{ b.label }}</div>
           </div>
         {% endfor %}
@@ -91,7 +88,7 @@ HTML = r"""
       {% endif %}
     </div>
 
-    <!-- Top services (unchanged) -->
+    <!-- Top services -->
     <div class="card">
       <h2 class="text-lg font-semibold mb-2">Top services</h2>
       <ul class="space-y-1 text-sm">
@@ -112,12 +109,10 @@ HTML = r"""
         {% if latest %}<div class="text-xs muted">{{ (latest.f_start_hz/1e6)|round(3) }}–{{ (latest.f_stop_hz/1e6)|round(3) }} MHz • bins={{ freq_bins|length }}{% endif %}</div>
       </div>
       {% if freq_bins and freq_bins | length > 0 %}
-        {% set maxf = freq_bins | map(attribute='count') | max %}
-        <div class="flex gap-[2px] items-end h-40">
+        <div class="flex gap-[2px] items-end" style="height: {{ chart_px }}px">
           {% for b in freq_bins %}
-            {% set h = (b.count / maxf * 100) if maxf > 0 else 0 %}
-            <div class="flex flex-col items-center" title="{{ '%.3f' % (b.mhz_start) }}–{{ '%.3f' % (b.mhz_end) }} MHz: {{ b.count }}">
-              <div class="w-3 bar rounded-t" style="height: {{ '%.1f' % h }}%"></div>
+            <div class="flex flex-col items-center" title="{{ '%.3f' % b.mhz_start }}–{{ '%.3f' % b.mhz_end }} MHz: {{ b.count }}">
+              <div class="w-3 bar rounded-t" style="height: {{ b.height_px }}px; background: #0ea5e9;"></div>
             </div>
           {% endfor %}
         </div>
@@ -161,12 +156,10 @@ HTML = r"""
         <div class="text-xs muted">Hour buckets (UTC)</div>
       </div>
       {% if by_hour and by_hour | length > 0 %}
-        {% set maxh = by_hour | map(attribute='count') | max %}
-        <div class="flex gap-1 items-end h-40">
+        <div class="flex gap-1 items-end" style="height: {{ chart_px }}px">
           {% for h in by_hour %}
-            {% set ht = (h.count / maxh * 100) if maxh > 0 else 0 %}
             <div class="flex flex-col items-center" title="{{ h.hour }}: {{ h.count }}">
-              <div class="w-4 bar rounded-t" style="height: {{ '%.1f' % ht }}%"></div>
+              <div class="w-4 bar rounded-t" style="height: {{ h.height_px }}px; background: #0ea5e9;"></div>
               <div class="text-[10px] muted rotate-45 origin-top-left -mt-1">{{ h.hour[-8:-3] }}</div>
             </div>
           {% endfor %}
@@ -179,7 +172,14 @@ HTML = r"""
 
 {% elif page == 'detections' %}
   <section class="card">
-    <div class="flex items-end gap-3 flex-wrap"><div class="grow"><h2 class="text-lg font-semibold">Detections</h2><div class="text-xs muted">{{ total }} total</div></div><a class="btn" href="/export/detections.csv?{{ qs }}">Export CSV</a></div>
+    <div class="flex items-end gap-3 flex-wrap">
+      <div class="grow">
+        <h2 class="text-lg font-semibold">Detections</h2>
+        <div class="text-xs muted">{{ total }} total</div>
+      </div>
+      <a class="btn" href="/export/detections.csv?{{ qs }}">Export CSV</a>
+    </div>
+
     <form class="mt-4 grid grid-cols-2 md:grid-cols-6 gap-3" method="get" action="/detections">
       <select name="service" class="input">
         <option value="">Service: any</option>
@@ -193,17 +193,29 @@ HTML = r"""
       <input class="input" type="number" step="1" name="since_hours" value="{{ req_args.get('since_hours','') }}" placeholder="Last N hours" />
       <button class="btn" type="submit">Apply</button>
     </form>
+
     <div id="detections-table" class="mt-4">
       <table class="table">
         <thead><tr class="text-slate-400"><th class="th">Time (UTC)</th><th class="th">Scan</th><th class="th">Center (MHz)</th><th class="th">Low–High (MHz)</th><th class="th">Peak (dB)</th><th class="th">Noise (dB)</th><th class="th">SNR (dB)</th><th class="th">Service</th><th class="th">Region</th><th class="th">Notes</th></tr></thead>
         <tbody>
         {% for r in rows %}
-          <tr class="hover:bg-white/5"><td class="td">{{ r.time_utc }}</td><td class="td">{{ r.scan_id }}</td><td class="td">{{ (r.f_center_hz/1e6)|round(6) }}</td><td class="td">{{ (r.f_low_hz/1e6)|round(6) }}–{{ (r.f_high_hz/1e6)|round(6) }}</td><td class="td">{{ '%.1f' % r.peak_db if r.peak_db is not none else '' }}</td><td class="td">{{ '%.1f' % r.noise_db if r.noise_db is not none else '' }}</td><td class="td">{{ '%.1f' % r.snr_db if r.snr_db is not none else '' }}</td><td class="td"><span class="chip">{{ r.service or 'Unknown' }}</span></td><td class="td">{{ r.region or '' }}</td><td class="td truncate max-w-[24ch]" title="{{ r.notes or '' }}">{{ r.notes or '' }}</td></tr>
+          <tr class="hover:bg-white/5">
+            <td class="td">{{ r.time_utc }}</td><td class="td">{{ r.scan_id }}</td>
+            <td class="td">{{ (r.f_center_hz/1e6)|round(6) }}</td>
+            <td class="td">{{ (r.f_low_hz/1e6)|round(6) }}–{{ (r.f_high_hz/1e6)|round(6) }}</td>
+            <td class="td">{{ '%.1f' % r.peak_db if r.peak_db is not none else '' }}</td>
+            <td class="td">{{ '%.1f' % r.noise_db if r.noise_db is not none else '' }}</td>
+            <td class="td">{{ '%.1f' % r.snr_db if r.snr_db is not none else '' }}</td>
+            <td class="td"><span class="chip">{{ r.service or 'Unknown' }}</span></td>
+            <td class="td">{{ r.region or '' }}</td>
+            <td class="td truncate max-w-[24ch]" title="{{ r.notes or '' }}">{{ r.notes or '' }}</td>
+          </tr>
         {% else %}
           <tr><td class="td" colspan="10">No detections found.</td></tr>
         {% endfor %}
         </tbody>
       </table>
+
       <div class="mt-3 flex items-center gap-2">
         {% set pages = (total // page_size) + (1 if (total % page_size) else 0) %}
         <div>Page {{ page_num }} / {{ pages if pages else 1 }}</div>
@@ -232,6 +244,7 @@ HTML = r"""
       </div>
     </div>
   </section>
+
 {% elif page == 'scans' %}
   <section class="card">
     <div class="flex items-end gap-3 flex-wrap"><div class="grow"><h2 class="text-lg font-semibold">Scans</h2><div class="text-xs muted">{{ total }} total</div></div></div>
@@ -264,6 +277,7 @@ HTML = r"""
       </div>
     </div>
   </section>
+
 {% elif page == 'baseline' %}
   <section class="card">
     <div class="flex items-end gap-3 flex-wrap"><div class="grow"><h2 class="text-lg font-semibold">Baseline (EMA around frequency)</h2><div class="text-xs muted">Peek at ema_occ & ema_power_db near a center frequency.</div></div></div>
@@ -285,6 +299,7 @@ HTML = r"""
       </table>
     </div>
   </section>
+
 {% endif %}
 </main>
 </body>
@@ -300,26 +315,37 @@ def open_db_ro(path: str) -> sqlite3.Connection:
     con.row_factory = lambda cur, row: {d[0]: row[i] for i, d in enumerate(cur.description)}
     return con
 
-def q1(con: sqlite3.Connection, sql: str, params: Tuple[Any, ...] = ()):  # one row
+def q1(con: sqlite3.Connection, sql: str, params: Tuple[Any, ...] = ()):
     cur = con.execute(sql, params)
     return cur.fetchone()
 
-def qa(con: sqlite3.Connection, sql: str, params: Tuple[Any, ...] = ()):  # all rows
+def qa(con: sqlite3.Connection, sql: str, params: Tuple[Any, ...] = ()):
     cur = con.execute(sql, params)
     return cur.fetchall()
 
-# --- helpers for stats/graphs (no external libs) ---
+# --- helpers for stats/graphs (compute pixel heights on server) ---
 
 def _percentile(xs: List[float], p: float) -> Optional[float]:
     if not xs:
         return None
     xs = sorted(xs)
     k = (len(xs) - 1) * p
-    f = math.floor(k)
-    c = math.ceil(k)
+    f = int(math.floor(k))
+    c = int(math.ceil(k))
     if f == c:
-        return float(xs[int(k)])
+        return float(xs[f])
     return float(xs[f] + (xs[c] - xs[f]) * (k - f))
+
+def _scale_counts_to_px(series: List[Dict[str, Any]], count_key: str = "count") -> None:
+    """Adds height_px to each dict based on max(count). Non-zero counts get a 2px min height."""
+    maxc = max((int(x.get(count_key, 0)) for x in series), default=0)
+    for x in series:
+        c = int(x.get(count_key, 0))
+        if maxc <= 0 or c <= 0:
+            x["height_px"] = 0
+        else:
+            h = int(round(c / maxc * CHART_HEIGHT_PX))
+            x["height_px"] = max(2, h)
 
 def snr_histogram(con: sqlite3.Connection, bucket_db: int = 3):
     rows = qa(con, "SELECT snr_db FROM detections WHERE snr_db IS NOT NULL")
@@ -329,14 +355,13 @@ def snr_histogram(con: sqlite3.Connection, bucket_db: int = 3):
             vals.append(float(r['snr_db']))
         except Exception:
             pass
-    # histogram
     buckets: Dict[int, int] = {}
     for s in vals:
         b = int(math.floor(s / bucket_db)) * bucket_db
         buckets[b] = buckets.get(b, 0) + 1
-    # build for template
     labels_sorted = sorted(buckets.keys())
     hist = [{"label": f"{b}–{b+bucket_db}", "count": buckets[b]} for b in labels_sorted]
+    _scale_counts_to_px(hist, "count")
     stats = None
     if vals:
         stats = {
@@ -348,7 +373,6 @@ def snr_histogram(con: sqlite3.Connection, bucket_db: int = 3):
     return hist, stats
 
 def detections_by_hour(con: sqlite3.Connection, hours: int = 24):
-    # last N hours including current hour
     rows = qa(con, """
         SELECT strftime('%Y-%m-%d %H:00:00', time_utc) AS hour, COUNT(*) AS c
         FROM detections
@@ -356,14 +380,13 @@ def detections_by_hour(con: sqlite3.Connection, hours: int = 24):
         GROUP BY hour
         ORDER BY hour
     """, (f"-{hours-1} hours",))
-    # Normalize to include empty hours
-    # Get list of hours from now-(hours-1) .. now
-    from datetime import datetime, timedelta, timezone
-    # use UTC because DB is UTC
+    # Normalize to include empty hours (UTC)
+    from datetime import datetime, timedelta
     now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
     timeline = [(now - timedelta(hours=i)).strftime("%Y-%m-%d %H:00:00") for i in reversed(range(hours))]
-    lookup = {r['hour']: r['c'] for r in rows if r['hour'] is not None}
-    out = [{"hour": h, "count": int(lookup.get(h, 0))} for h in timeline]
+    lookup = {r['hour']: int(r['c']) for r in rows if r['hour'] is not None}
+    out = [{"hour": h, "count": lookup.get(h, 0)} for h in timeline]
+    _scale_counts_to_px(out, "count")
     return out
 
 def frequency_bins_latest_scan(con: sqlite3.Connection, num_bins: int = 40):
@@ -371,13 +394,12 @@ def frequency_bins_latest_scan(con: sqlite3.Connection, num_bins: int = 40):
     if not latest:
         return [], None
     f0 = float(latest['f_start_hz']); f1 = float(latest['f_stop_hz'])
-    if f1 <= f0:
+    if not (f1 > f0):
         return [], latest
-    # Pull detections for that scan only (tightest/most relevant snapshot)
     dets = qa(con, "SELECT f_center_hz FROM detections WHERE scan_id = ?", (latest['id'],))
     if not dets:
         return [], latest
-    width = (f1 - f0) / num_bins
+    width = (f1 - f0) / max(1, num_bins)
     bins = [{"count":0, "mhz_start": (f0 + i*width)/1e6, "mhz_end": (f0 + (i+1)*width)/1e6} for i in range(num_bins)]
     for r in dets:
         try:
@@ -389,6 +411,7 @@ def frequency_bins_latest_scan(con: sqlite3.Connection, num_bins: int = 40):
         idx = int((fc - f0) // width)
         idx = max(0, min(num_bins-1, idx))
         bins[idx]["count"] += 1
+    _scale_counts_to_px(bins, "count")
     return bins, latest
 
 def strongest_signals(con: sqlite3.Connection, limit: int = 10):
@@ -411,24 +434,15 @@ def create_app(db_path: str) -> Flask:
 
     @app.route('/')
     def dashboard():
-        scans_total = q1(con(), "SELECT COUNT(*) AS c FROM scans")['c'] if q1(con(), "SELECT COUNT(*) AS c FROM scans") else 0
-        detections_total = q1(con(), "SELECT COUNT(*) AS c FROM detections")['c'] if q1(con(), "SELECT COUNT(*) AS c FROM detections") else 0
-        baseline_total = q1(con(), "SELECT COUNT(*) AS c FROM baseline")['c'] if q1(con(), "SELECT COUNT(*) AS c FROM baseline") else 0
+        scans_total = q1(con(), "SELECT COUNT(*) AS c FROM scans")['c'] or 0
+        detections_total = q1(con(), "SELECT COUNT(*) AS c FROM detections")['c'] or 0
+        baseline_total = q1(con(), "SELECT COUNT(*) AS c FROM baseline")['c'] or 0
 
-        # SNR hist + stats (bucket size 3 dB like before; tweakable)
         snr_bucket_db = 3
         snr_hist, snr_stats = snr_histogram(con(), bucket_db=snr_bucket_db)
-
-        # Frequency distribution from latest scan
         freq_bins, latest = frequency_bins_latest_scan(con(), num_bins=40)
-
-        # Detections per hour (last 24h)
         by_hour = detections_by_hour(con(), hours=24)
-
-        # Top services (unchanged)
         top_services = qa(con(), "SELECT COALESCE(service,'Unknown') AS service, COUNT(*) AS count FROM detections GROUP BY COALESCE(service,'Unknown') ORDER BY count DESC LIMIT 10")
-
-        # Strongest signals
         strongest = strongest_signals(con(), limit=10)
 
         return render_template_string(
@@ -445,6 +459,7 @@ def create_app(db_path: str) -> Flask:
             by_hour=by_hour,
             top_services=top_services,
             strongest=strongest,
+            chart_px=CHART_HEIGHT_PX,
         )
 
     @app.route('/detections')
@@ -479,7 +494,6 @@ def create_app(db_path: str) -> Flask:
             ORDER BY time_utc DESC
             LIMIT ? OFFSET ?
         """, tuple(params)+(page_size, offset))
-        # service list
         sv = [r['service'] for r in qa(con(), "SELECT DISTINCT COALESCE(service,'Unknown') AS service FROM detections ORDER BY service")]
         qs = args.to_dict(flat=True)
         qs = "&".join([f"{k}={v}" for k,v in qs.items()])
