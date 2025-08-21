@@ -46,7 +46,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable, List, Optional, Tuple
 
-import numpy as np # type: ignore
+import numpy as np  # type: ignore
 
 # SciPy is optional. If missing, we fall back to a simple periodogram average.
 try:
@@ -59,7 +59,7 @@ except Exception:
 # SoapySDR is optional (used for multi-device support).
 try:
     import SoapySDR  # type: ignore
-    from SoapySDR import SOAPY_SDR_CF32, SOAPY_SDR_RX # type: ignore
+    from SoapySDR import SOAPY_SDR_CF32, SOAPY_SDR_RX  # type: ignore
 
     HAVE_SOAPY = True
 except Exception:
@@ -420,7 +420,7 @@ def cfar_os_mask(psd_db: np.ndarray, train: int, guard: int, quantile: float, al
     # Convert to linear power
     psd_lin = np.power(10.0, psd_db / 10.0)
     # Build sliding windows with padding so we have a window for each bin
-    win = 2*train + 2*guard + 1
+    win = 2 * train + 2 * guard + 1
     if win <= 1:
         # Degenerate: no training cells; fall back to global median as noise
         noise_db = np.full(N, float(np.median(psd_db)))
@@ -431,12 +431,12 @@ def cfar_os_mask(psd_db: np.ndarray, train: int, guard: int, quantile: float, al
     windows = _sliding_window_view(padded, win)  # shape (N, win)
     # Exclude guard + CUT region by masking them out
     mask = np.ones(win, dtype=bool)
-    mask[train:train+2*guard+1] = False  # False over guard + CUT
-    train_windows = windows[:, mask]     # shape (N, 2*train)
+    mask[train : train + 2 * guard + 1] = False  # False over guard + CUT
+    train_windows = windows[:, mask]  # shape (N, 2*train)
     # Order statistic via quantile over training cells
-    q = float(np.clip(quantile, 1e-6, 1.0-1e-6))
+    q = float(np.clip(quantile, 1e-6, 1.0 - 1e-6))
     noise_lin = np.quantile(train_windows, q, axis=1)
-    alpha = np.power(10.0, alpha_db/10.0)
+    alpha = np.power(10.0, alpha_db / 10.0)
     threshold_lin = noise_lin * alpha
     above = psd_lin > threshold_lin
     noise_db = 10.0 * np.log10(np.maximum(noise_lin, 1e-20))
@@ -506,16 +506,18 @@ def detect_segments(
                 snr_db = float(peak_db - noise_db)
                 # freq bounds (use bin edges assuming uniform spacing)
                 f_low = float(freqs_hz[start_i])
-                f_high = float(freqs_hz[end_i-1])
-                f_center = float(freqs_hz[(start_i + end_i)//2])
-                segs.append(Segment(
-                    f_low_hz=int(round(f_low)),
-                    f_high_hz=int(round(f_high)),
-                    f_center_hz=int(round(f_center)),
-                    peak_db=peak_db,
-                    noise_db=noise_db,
-                    snr_db=snr_db,
-                ))
+                f_high = float(freqs_hz[end_i - 1])
+                f_center = float(freqs_hz[(start_i + end_i) // 2])
+                segs.append(
+                    Segment(
+                        f_low_hz=int(round(f_low)),
+                        f_high_hz=int(round(f_high)),
+                        f_center_hz=int(round(f_center)),
+                        peak_db=peak_db,
+                        noise_db=noise_db,
+                        snr_db=snr_db,
+                    )
+                )
             i = j
         else:
             i += 1
@@ -535,7 +537,7 @@ def compute_psd_db(samples: np.ndarray, samp_rate: float, fft_size: int, avg: in
         freqs = freqs[order]
         psd = psd[order]
         # shift to baseband (-Fs/2..+Fs/2)
-        mid = len(freqs)//2
+        mid = len(freqs) // 2
         freqs = np.concatenate((freqs[mid:], freqs[:mid]))
         psd = np.concatenate((psd[mid:], psd[:mid]))
     else:
@@ -590,18 +592,34 @@ def maybe_emit_jsonl(path: Optional[str], record: dict):
 # Main sweep logic
 # ------------------------------
 
-def run(args):
-    bandplan = Bandplan(args.bandplan)
-    store = Store(args.db)
+def _parse_duration_to_seconds(text: Optional[str]) -> Optional[float]:
+    """Parse a human-friendly duration string to seconds.
+    Supports integers/floats (seconds) or suffixes: s, m, h, d.
+    Returns None if text is falsy.
+    """
+    if not text:
+        return None
+    try:
+        t = str(text).strip().lower()
+        mult = 1.0
+        if t.endswith("s"):
+            t = t[:-1]
+        elif t.endswith("m"):
+            mult = 60.0
+            t = t[:-1]
+        elif t.endswith("h"):
+            mult = 3600.0
+            t = t[:-1]
+        elif t.endswith("d"):
+            mult = 86400.0
+            t = t[:-1]
+        return float(t) * mult
+    except Exception:
+        raise ValueError(f"Invalid duration string: {text}")
 
-    # Select source backend
-    if args.driver == "rtlsdr_native":
-        src = RTLSDRSource(samp_rate=args.samp_rate, gain=args.gain)
-        hwkey = "RTL-SDR (native)"
-    else:
-        src = SDRSource(driver=args.driver, samp_rate=args.samp_rate, gain=args.gain)
-        hwkey = str(src.dev.getHardwareKey() if HAVE_SOAPY else "")
 
+def _do_one_sweep(args, store: Store, bandplan: Bandplan, src) -> int:
+    """Perform a single full sweep across [start, stop] inclusive, returning the scan_id."""
     meta = dict(
         t_start_utc=utc_now_str(),
         f_start_hz=int(args.start),
@@ -610,7 +628,7 @@ def run(args):
         samp_rate=int(args.samp_rate),
         fft=int(args.fft),
         avg=int(args.avg),
-        device=hwkey,
+        device=str(getattr(src, 'dev', getattr(src, 'device', '')) if HAVE_SOAPY else getattr(src, 'device', '')),
         driver=args.driver,
     )
     scan_id = store.start_scan(meta)
@@ -628,7 +646,18 @@ def run(args):
             rf_freqs = baseband_f + center
 
             # Detect segments
-            segs, occ_mask_cfar, noise_local_db = detect_segments(rf_freqs, psd_db, thresh_db=args.threshold_db, guard_bins=args.guard_bins, min_width_bins=args.min_width_bins, cfar_mode=args.cfar, cfar_train=args.cfar_train, cfar_guard=args.cfar_guard, cfar_quantile=args.cfar_quantile, cfar_alpha_db=args.cfar_alpha_db)
+            segs, occ_mask_cfar, _noise_local_db = detect_segments(
+                rf_freqs,
+                psd_db,
+                thresh_db=args.threshold_db,
+                guard_bins=args.guard_bins,
+                min_width_bins=args.min_width_bins,
+                cfar_mode=args.cfar,
+                cfar_train=args.cfar_train,
+                cfar_guard=args.cfar_guard,
+                cfar_quantile=args.cfar_quantile,
+                cfar_alpha_db=args.cfar_alpha_db,
+            )
 
             # Occupancy mask per bin for baseline update
             noise_db = robust_noise_floor_db(psd_db)
@@ -673,12 +702,68 @@ def run(args):
             # Advance center frequency
             center += args.step
 
-            # If user asked for single pass per window
-            if args.once:
+    finally:
+        # End scan (always set end time)
+        store.end_scan(scan_id, utc_now_str())
+
+    return scan_id
+
+
+def run(args):
+    bandplan = Bandplan(args.bandplan)
+    store = Store(args.db)
+
+    # Select source backend
+    if args.driver == "rtlsdr_native":
+        src = RTLSDRSource(samp_rate=args.samp_rate, gain=args.gain)
+        hwkey = "RTL-SDR (native)"
+        setattr(src, 'device', hwkey)
+    else:
+        src = SDRSource(driver=args.driver, samp_rate=args.samp_rate, gain=args.gain)
+
+    # Determine termination policy
+    duration_s = _parse_duration_to_seconds(args.duration)
+    start_time = time.time()
+
+    # Compute how many sweeps to run: None for infinite
+    # Rules:
+    # - If --loop, infinite.
+    # - If --repeat N, exactly N sweeps.
+    # - If --duration is provided WITHOUT --loop/--repeat, run until time expires (infinite sweeps governed by time).
+    # - Otherwise (no flags), run exactly one sweep.
+    if args.loop:
+        sweeps_remaining: Optional[int] = None
+    elif args.repeat is not None:
+        sweeps_remaining = int(args.repeat)
+    elif duration_s is not None:
+        sweeps_remaining = None  # duration governs
+    else:
+        sweeps_remaining = 1  # default single sweep
+
+    try:
+        while True:
+            # Duration check (before starting next sweep)
+            if duration_s is not None and (time.time() - start_time) >= duration_s:
                 break
 
-        # End scan
-        store.end_scan(scan_id, utc_now_str())
+            _do_one_sweep(args, store, bandplan, src)
+
+            # After each sweep, respect duration again
+            if duration_s is not None and (time.time() - start_time) >= duration_s:
+                break
+
+            if sweeps_remaining is not None:
+                sweeps_remaining -= 1
+                if sweeps_remaining <= 0:
+                    break
+
+            # Sleep between sweeps if requested
+            if args.sleep_between_sweeps > 0:
+                time.sleep(args.sleep_between_sweeps)
+
+    except KeyboardInterrupt:
+        # Graceful exit on Ctrl-C
+        pass
     finally:
         try:
             src.close()
@@ -718,7 +803,14 @@ def parse_args():
     p.add_argument("--jsonl", type=str, default=None, help="Emit detections as line-delimited JSON to this path")
     p.add_argument("--notify", action="store_true", help="Desktop notifications for new signals")
     p.add_argument("--new-ema-occ", type=float, default=0.02, help="EMA occupancy threshold to flag a bin as NEW")
-    p.add_argument("--once", action="store_true", help="Do a single sweep then exit (ignored during a single window)")
+
+    # Sweep control modes (mutually exclusive)
+    group = p.add_mutually_exclusive_group()
+    group.add_argument("--loop", action="store_true", help="Run continuous sweep cycles until cancelled")
+    group.add_argument("--repeat", type=int, help="Run exactly N full sweep cycles, then exit")
+    group.add_argument("--duration", type=str, help="Run sweeps for a duration (e.g., '300', '10m', '2h'). Overrides --repeat count while time remains")
+
+    p.add_argument("--sleep-between-sweeps", type=float, default=0.0, help="Seconds to sleep between sweep cycles")
 
     args = p.parse_args()
     # Backend availability check: only require Soapy if not using rtlsdr_native
@@ -728,6 +820,11 @@ def parse_args():
         p.error("pyrtlsdr not installed. Install with: pip3 install pyrtlsdr")
     if args.stop < args.start:
         p.error("--stop must be >= --start")
+
+    # Validate duration string early
+    if args.duration:
+        _ = _parse_duration_to_seconds(args.duration)
+
     return args
 
 
