@@ -1,4 +1,4 @@
-# SDRwatch
+# SDRwatch 📡
 
 **Wideband scanner, baseline builder, and bandplan mapper for SDR devices.**
 
@@ -6,18 +6,18 @@ SDRwatch is a Python-based tool to sweep wide frequency ranges with an SDR, dete
 
 ---
 
-## Features
+## ✨ Features
 
-* **Wideband Sweeps**: Scan across defined frequency ranges using SoapySDR-compatible radios (RTL-SDR, HackRF, Airspy, LimeSDR, USRP, etc.) or native RTL-SDR via `--driver rtlsdr_native`.
-* **Signal Detection**: Robust noise floor estimation (median + MAD) and CFAR-style detection (Order-Statistic / Cell-Averaging).
-* **Baseline Tracking**: Maintains an exponential moving average of occupancy and power per frequency bin to identify persistent vs. new signals.
-* **Bandplan Mapping**: Maps detections to allocations (FCC, CEPT, ITU-R, etc.) from a CSV file or built-in defaults.
-* **Data Logging**: All scans, detections, and baselines are stored in SQLite.
-* **Alerts & Outputs**:
+* **📶 Wideband Sweeps**: Scan across defined frequency ranges using SoapySDR-compatible radios (RTL-SDR, HackRF, Airspy, LimeSDR, USRP, etc.) or native RTL-SDR via `--driver rtlsdr_native`.
+* **🔎 Signal Detection**: Robust noise floor estimation (median + MAD) and CFAR-style detection (Order-Statistic / Cell-Averaging).
+* **📊 Baseline Tracking**: Maintains an exponential moving average of occupancy and power per frequency bin to identify persistent vs. new signals.
+* **🗺 Bandplan Mapping**: Maps detections to allocations (FCC, CEPT, ITU-R, etc.) from a CSV file or built-in defaults.
+* **💾 Data Logging**: All scans, detections, and baselines are stored in SQLite.
+* **🔔 Alerts & Outputs**:
 
   * Desktop notifications (`notify-send`) for newly detected signals.
   * JSONL log output for integration with external tools (Grafana, Loki, ELK).
-* **Web Dashboard**: A lightweight Flask app (`sdrwatch-web-simple.py`) to view:
+* **📈 Web Dashboard**: A lightweight Flask app (`sdrwatch-web-simple.py`) to view:
 
   * Summary stats (scans, detections, baseline bins)
   * SNR histograms and strongest signals
@@ -26,7 +26,7 @@ SDRwatch is a Python-based tool to sweep wide frequency ranges with an SDR, dete
 
 ---
 
-## Installation
+## ⚙️ Installation
 
 Run the included setup script:
 
@@ -37,10 +37,10 @@ chmod +x setup.sh
 
 This will:
 
-* Install system dependencies (NumPy, SciPy, SoapySDR, RTL-SDR)
-* Set up a Python virtual environment with minimal pip packages
-* Verify RTL-SDR toolchain (`rtl_test`)
-* Add udev rules + kernel module blacklist for SDR dongles
+* 📦 Install system dependencies (NumPy, SciPy, SoapySDR, RTL-SDR)
+* 🐍 Set up a Python virtual environment with minimal pip packages
+* 🛠 Verify RTL-SDR toolchain (`rtl_test`)
+* 🔒 Add udev rules + kernel module blacklist for SDR dongles
 
 After reboot:
 
@@ -50,7 +50,7 @@ source .venv/bin/activate
 
 ---
 
-## Usage
+## 🚀 Usage
 
 Sweep the FM broadcast band once:
 
@@ -84,11 +84,11 @@ Run the web dashboard:
 python3 sdrwatch-web-simple.py --db sdrwatch.db --host 0.0.0.0 --port 8080
 ```
 
-Then open [http://localhost:8080](http://localhost:8080).
+Then open [http://localhost:8080](http://localhost:8080). 🌐
 
 ---
 
-## Database Schema (SQLite)
+## 🗄 Database Schema (SQLite)
 
 * **scans**: metadata about each sweep
 * **detections**: records of each detected signal
@@ -96,7 +96,7 @@ Then open [http://localhost:8080](http://localhost:8080).
 
 ---
 
-## Bandplan CSV Format
+## 📑 Bandplan CSV Format
 
 ```csv
 low_hz,high_hz,service,region,notes
@@ -109,7 +109,7 @@ Extend this file with allocations from official tables (FCC, ITU, CEPT, BNetzA, 
 
 ---
 
-## Inspecting Collected Data
+## 🔍 Inspecting Collected Data
 
 Query detections:
 
@@ -133,7 +133,7 @@ sqlite3 -header -csv sdrwatch.db "SELECT * FROM detections;" > detections.csv
 
 ---
 
-## Roadmap
+## 🛠 Roadmap
 
 * More advanced CFAR modes & presets
 * Duty-cycle analysis for bursty signals
@@ -142,12 +142,12 @@ sqlite3 -header -csv sdrwatch.db "SELECT * FROM detections;" > detections.csv
 
 ---
 
-## License
+## 📜 License
 
 MIT License. See [LICENSE](LICENSE).
 
 ---
 
-## Acknowledgements
+## 🙏 Acknowledgements
 
 Inspired by tools such as `rtl_power`, `SoapyPower`, and GNU Radio’s `gr-inspector`, but designed for persistent baselining, CFAR detection, and allocation mapping.
