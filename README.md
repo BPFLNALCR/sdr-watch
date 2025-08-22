@@ -1,131 +1,153 @@
-# 📡 SDRwatch
+# SDRwatch
 
-**Wideband spectrum scanner, baseline builder, and bandplan mapper for SDR devices.**
+**Wideband scanner, baseline builder, and bandplan mapper for SDR devices.**
 
----
-
-## ✨ Overview
-
-SDRwatch is a Python-based toolchain for **spectrum monitoring and analysis**. It allows you to:
-
-* Sweep wide frequency ranges with SDRs.
-* Detect and classify signals above the noise floor.
-* Maintain a **long-term baseline** of spectrum occupancy.
-* Map detections to **regulatory bandplans**.
-* Visualize and query results via a **CLI tool** or optional **web dashboard**.
+SDRwatch is a Python-based tool to sweep wide frequency ranges with an SDR, detect signals above the noise floor, build a long-term baseline of occupancy, and map detections to frequency allocations. It can run continuously to notify you when new signals appear relative to the baseline, and includes a simple web dashboard for visualization.
 
 ---
 
-## 🚀 Features
+## Features
 
-* **Wideband Sweeps**: Scan defined frequency ranges using SoapySDR-compatible radios (RTL-SDR, HackRF, Airspy, LimeSDR, USRP, etc.).
-* **Noise Floor Estimation**: Robust algorithms (median + MAD) with upcoming CFAR support.
-* **Signal Detection & Baseline Tracking**:
+* **Wideband Sweeps**: Scan across defined frequency ranges using SoapySDR-compatible radios (RTL-SDR, HackRF, Airspy, LimeSDR, USRP, etc.) or native RTL-SDR via `--driver rtlsdr_native`.
+* **Signal Detection**: Robust noise floor estimation (median + MAD) and CFAR-style detection (Order-Statistic / Cell-Averaging).
+* **Baseline Tracking**: Maintains an exponential moving average of occupancy and power per frequency bin to identify persistent vs. new signals.
+* **Bandplan Mapping**: Maps detections to allocations (FCC, CEPT, ITU-R, etc.) from a CSV file or built-in defaults.
+* **Data Logging**: All scans, detections, and baselines are stored in SQLite.
+* **Alerts & Outputs**:
 
-  * Threshold-based detection above noise floor.
-  * EMA-based tracking to distinguish persistent vs transient signals.
-* **Bandplan Mapping**: Match detections against allocations (FCC, CEPT, ITU-R, etc.) via CSV.
-* **Data Persistence**: Store all scans, detections, and baselines in **SQLite**.
-* **Outputs & Notifications**:
+  * Desktop notifications (`notify-send`) for newly detected signals.
+  * JSONL log output for integration with external tools (Grafana, Loki, ELK).
+* **Web Dashboard**: A lightweight Flask app (`sdrwatch-web-simple.py`) to view:
 
-  * Desktop notifications for new signals (`notify-send`).
-  * JSONL logging for Grafana, Loki, ELK, or custom integrations.
-* **Query & Web Tools**:
-
-  * `query-sdrwatch.py` for summaries, histograms, and service-level stats.
-  * Lightweight Flask-based web interface.
+  * Summary stats (scans, detections, baseline bins)
+  * SNR histograms and strongest signals
+  * Top services and frequency distributions
+  * Detections over time and CSV export
 
 ---
 
-## 🛠️ Installation (Debian/Raspberry Pi)
+## Installation
+
+Run the included setup script:
 
 ```bash
-# Update system
-sudo apt update
+chmod +x setup.sh
+./setup.sh
+```
 
-# Core dependencies
-sudo apt install -y python3 python3-pip python3-numpy python3-scipy \
-    python3-soapysdr soapysdr-module-rtlsdr rtl-sdr sqlite3
+This will:
 
-# Optional: desktop notifications
-sudo apt install -y libnotify-bin
+* Install system dependencies (NumPy, SciPy, SoapySDR, RTL-SDR)
+* Set up a Python virtual environment with minimal pip packages
+* Verify RTL-SDR toolchain (`rtl_test`)
+* Add udev rules + kernel module blacklist for SDR dongles
 
-# Optional: Flask web UI
-pip install flask
+After reboot:
+
+```bash
+source .venv/bin/activate
 ```
 
 ---
 
-## ▶️ Usage
+## Usage
 
-### Example 1: Sweep FM broadcast band once (88–108 MHz)
-
-```bash
-python3 sdrwatch.py --start 88e6 --stop 108e6 --step 2.0e6 --samp-rate 2.0e6 \
-  --fft 4096 --avg 8 --driver rtlsdr --gain auto --once --bandplan bandplan.csv
-```
-
-### Example 2: Continuous monitoring (30 MHz – 1.7 GHz)
+Sweep the FM broadcast band once:
 
 ```bash
-python3 sdrwatch.py --start 30e6 --stop 1700e6 --step 2.4e6 --samp-rate 2.4e6 \
-  --fft 4096 --avg 8 --driver rtlsdr --gain auto --notify \
-  --bandplan bandplan.csv --db sdrwatch.db --jsonl events.jsonl
+python3 sdrwatch.py --driver rtlsdr --start 88e6 --stop 108e6 --step 2.4e6
 ```
+
+Continuous scanning for 30 minutes, with 5s delay between sweeps:
+
+```bash
+python3 sdrwatch.py --driver rtlsdr --start 88e6 --stop 108e6 \
+  --duration 30m --sleep-between-sweeps 5 --db sdrwatch.db
+```
+
+Native librtlsdr path (no Soapy):
+
+```bash
+python3 sdrwatch.py --driver rtlsdr_native --start 88e6 --stop 108e6
+```
+
+Enable CFAR detection:
+
+```bash
+python3 sdrwatch.py --start 400e6 --stop 420e6 \
+  --cfar os --cfar-train 24 --cfar-guard 4 --cfar-quantile 0.75
+```
+
+Run the web dashboard:
+
+```bash
+python3 sdrwatch-web-simple.py --db sdrwatch.db --host 0.0.0.0 --port 8080
+```
+
+Then open [http://localhost:8080](http://localhost:8080).
 
 ---
 
-## 📊 Querying the Database
+## Database Schema (SQLite)
 
-Summarize contents:
-
-```bash
-python3 query-sdrwatch.py --db sdrwatch.db summary
-```
-
-List recent scans:
-
-```bash
-python3 query-sdrwatch.py --db sdrwatch.db scans --limit 10
-```
-
-Show service-level statistics:
-
-```bash
-python3 query-sdrwatch.py --db sdrwatch.db services
-```
+* **scans**: metadata about each sweep
+* **detections**: records of each detected signal
+* **baseline**: per-frequency EMA occupancy and power statistics
 
 ---
 
-## 📑 Bandplan CSV Example
+## Bandplan CSV Format
 
 ```csv
 low_hz,high_hz,service,region,notes
-433050000,434790000,ISM,ITU-R1 (EU),Short-range devices (SRD)
+433050000,434790000,ISM/SRD,ITU-R1 (EU),Short-range devices
 902000000,928000000,ISM,US (FCC),902-928 MHz ISM band
 2400000000,2483500000,ISM,Global,2.4 GHz ISM
 ```
 
----
-
-## 🗺️ Roadmap
-
-* ✅ CLI query tools
-* ✅ SQLite database integration
-* 🔄 CFAR algorithms for adaptive detection
-* 🔄 Duty cycle analysis for bursty signals
-* 🔄 Expanded bandplan datasets (FCC, CEPT, BNetzA)
-* 🔄 Enhanced Flask web UI with visualizations
-* 🔄 Multi-SDR support (sweeping + monitoring roles)
+Extend this file with allocations from official tables (FCC, ITU, CEPT, BNetzA, etc.).
 
 ---
 
-## 📜 License
+## Inspecting Collected Data
 
-MIT License. See [LICENSE](LICENSE) for details.
+Query detections:
+
+```bash
+sqlite3 -header -column sdrwatch.db \
+  "SELECT time_utc,f_center_hz/1e6 AS MHz,snr_db,service FROM detections ORDER BY id DESC LIMIT 20;"
+```
+
+Query baseline occupancy:
+
+```bash
+sqlite3 -header -column sdrwatch.db \
+  "SELECT bin_hz/1e6 AS MHz,round(ema_occ,3) AS occ FROM baseline ORDER BY occ DESC LIMIT 20;"
+```
+
+Export to CSV:
+
+```bash
+sqlite3 -header -csv sdrwatch.db "SELECT * FROM detections;" > detections.csv
+```
 
 ---
 
-## 🙌 Acknowledgements
+## Roadmap
 
-Inspired by `rtl_power`, `SoapyPower`, and GNU Radio’s `gr-inspector` — reimagined for **persistent baselining** and **automated regulatory mapping**.
+* More advanced CFAR modes & presets
+* Duty-cycle analysis for bursty signals
+* Expanded region-specific bandplans (FCC / CEPT / BNetzA)
+* Enhanced dashboard with interactive graphs
+
+---
+
+## License
+
+MIT License. See [LICENSE](LICENSE).
+
+---
+
+## Acknowledgements
+
+Inspired by tools such as `rtl_power`, `SoapyPower`, and GNU Radio’s `gr-inspector`, but designed for persistent baselining, CFAR detection, and allocation mapping.
