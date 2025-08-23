@@ -1,17 +1,28 @@
 #!/usr/bin/env python3
 """
-SDRwatch Web (simple)
+SDRwatch Web (control-enabled)
 Run:
   python3 sdrwatch-web-simple.py --db sdrwatch.db --host 0.0.0.0 --port 8080
+
+Adds a minimal process manager to launch/stop sdrwatch.py with JSON params,
+Server-Sent Events (SSE) live logs, and a simple Control UI. Keeps all
+previous dashboard/detections/baseline pages intact.
 """
 from __future__ import annotations
-import argparse, os, io, sqlite3, math
+import argparse, os, io, sqlite3, math, threading, queue, time, shlex, signal, subprocess, json, sys
 from typing import Any, Dict, List, Optional, Tuple
-from flask import Flask, request, Response, render_template_string  # type: ignore
+from flask import Flask, request, Response, render_template_string, jsonify, abort  # type: ignore
 
-# Fixed bar area height (px) so bars render even if Tailwind is missing
-CHART_HEIGHT_PX = 160
+# ================================
+# Config
+# ================================
+CHART_HEIGHT_PX = 160  # Fixed bar height so bars render even if Tailwind is absent
+API_TOKEN = os.getenv("SDRWATCH_TOKEN", "")  # set in systemd or shell
+SDRWATCH_BIN = os.getenv("SDRWATCH_BIN", "sdrwatch.py")  # path to sdrwatch.py
 
+# ================================
+# HTML (now includes Control page)
+# ================================
 HTML = r"""
 <!doctype html>
 <html lang="en">
@@ -25,11 +36,15 @@ HTML = r"""
     .card { border-radius: 1rem; padding: 1rem; background: rgba(255,255,255,.05); color: #e2e8f0; border: 1px solid rgba(255,255,255,.1) }
     .chip { display:inline-flex; align-items:center; padding:.125rem .5rem; border-radius:999px; font-size:.75rem; background: rgba(255,255,255,.1) }
     .btn { display:inline-flex; gap:.5rem; align-items:center; padding:.5rem .75rem; border-radius:.75rem; background:#0284c7; color:white }
+    .btn.red { background:#ef4444 }
     .input { padding:.5rem .75rem; border-radius:.75rem; border:1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.05); color:#e2e8f0 }
     .table { width:100%; font-size:.9rem }
     .th,.td { padding:.5rem .75rem; text-align:left; border-bottom:1px solid rgba(255,255,255,.1) }
-    .bar { background:#0ea5e9; } /* fallback if Tailwind isn't applied */
+    .bar { background:#0ea5e9; }
     .muted { color:#94a3b8 }
+    .pill { padding:.125rem .5rem; border-radius:999px; font-size:.75rem }
+    .pill.idle { background:#334155; color:#e2e8f0 }
+    .pill.run { background:#16a34a; color:#052e16 }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen">
@@ -37,6 +52,7 @@ HTML = r"""
   <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-6">
     <div class="text-xl font-semibold">📡 SDRwatch</div>
     <nav class="flex items-center gap-4 text-sm">
+      <a href="/control" class="underline">Control</a>
       <a href="/" class="underline">Dashboard</a>
       <a href="/detections" class="underline">Detections</a>
       <a href="/scans" class="underline">Scans</a>
@@ -46,8 +62,118 @@ HTML = r"""
 </header>
 
 <main class="max-w-7xl mx-auto px-4 py-6">
-{% if page == 'dashboard' %}
+{% if page == 'control' %}
+  <section class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+    <div class="card lg:col-span-2">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-lg font-semibold">SDRwatch Control</h2>
+        <div><span class="muted">State:</span> <span id="state-pill" class="pill idle">Idle</span></div>
+      </div>
+      <form id="ctl" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <input class="input" name="driver" value="rtlsdr" placeholder="driver" />
+        <input class="input" name="gain" value="auto" placeholder="gain (dB|auto)" />
+        <input class="input" name="start" value="88e6" placeholder="start Hz" />
+        <input class="input" name="stop" value="108e6" placeholder="stop Hz" />
+        <input class="input" name="step" value="2.4e6" placeholder="step Hz" />
+        <input class="input" name="samp_rate" value="2.4e6" placeholder="samp rate Hz" />
+        <input class="input" name="fft" value="4096" placeholder="fft" />
+        <input class="input" name="avg" value="8" placeholder="avg" />
+        <input class="input" name="threshold_db" value="8" placeholder="threshold dB" />
+        <input class="input" name="guard_bins" value="1" placeholder="guard bins" />
+        <input class="input" name="min_width_bins" value="2" placeholder="min width bins" />
+        <select class="input" name="cfar">
+          <option value="os" selected>CFAR: os</option>
+          <option value="off">CFAR: off</option>
+        </select>
+        <input class="input" name="cfar_train" value="24" placeholder="cfar train" />
+        <input class="input" name="cfar_guard" value="4" placeholder="cfar guard" />
+        <input class="input" name="cfar_quantile" value="0.75" placeholder="cfar quantile" />
+        <input class="input" name="cfar_alpha_db" value="" placeholder="cfar alpha dB (opt)" />
+        <input class="input" name="bandplan" value="" placeholder="bandplan.csv (opt)" />
+        <input class="input" name="db" value="{{ db_path }}" placeholder="db path" />
+        <input class="input" name="jsonl" value="" placeholder="jsonl path (opt)" />
+        <label class="flex items-center gap-2"><input type="checkbox" name="notify" /> <span class="text-sm">Desktop notify</span></label>
+        <input class="input" name="new_ema_occ" value="0.02" placeholder="new ema occ" />
+        <select class="input" name="mode">
+          <option value="single">Single sweep</option>
+          <option value="loop">Loop</option>
+          <option value="repeat">Repeat N</option>
+          <option value="duration">Duration</option>
+        </select>
+        <input class="input" name="repeat" value="" placeholder="N (repeat)" />
+        <input class="input" name="duration" value="" placeholder="e.g. 10m" />
+        <input class="input" name="sleep_between_sweeps" value="0" placeholder="sleep s" />
+        <div class="col-span-2 flex gap-2 mt-1">
+          <button class="btn" type="submit">▶ Start</button>
+          <button class="btn red" type="button" id="stopBtn">■ Stop</button>
+        </div>
+      </form>
+      <div class="mt-4">
+        <div class="text-xs muted mb-1">Live logs</div>
+        <pre id="log" style="height:260px;overflow:auto;background:#0b1220;color:#c7f9ff;padding:8px;border-radius:.75rem"></pre>
+      </div>
+    </div>
+    <div class="card">
+      <h3 class="text-lg font-semibold mb-2">Quick presets</h3>
+      <div class="grid grid-cols-2 gap-2 text-sm">
+        <button class="btn" onclick="preset('FM')">FM 88–108 MHz</button>
+        <button class="btn" onclick="preset('2m')">2 m 144–148 MHz</button>
+        <button class="btn" onclick="preset('70cm')">70 cm 420–450 MHz</button>
+        <button class="btn" onclick="preset('AIS')">AIS 161.975–162.025 MHz</button>
+      </div>
+      <div class="mt-4 text-xs muted">Edit the fields after applying a preset if needed.</div>
+      <div class="mt-4 text-xs"><span class="muted">Token:</span> stored in browser localStorage as <code>SDRWATCH_TOKEN</code>.</div>
+    </div>
+  </section>
+  <script>
+  const TOKEN = localStorage.getItem("SDRWATCH_TOKEN") || "";
+  function authHeaders(){ return TOKEN ? {"Authorization":"Bearer "+TOKEN, "Content-Type":"application/json"} : {"Content-Type":"application/json"}; }
+  const pill = document.getElementById('state-pill');
+  function setState(s){ pill.textContent = s; pill.className = 'pill ' + (s==='running'?'run':'idle'); }
 
+  function preset(k){
+    const f = document.getElementById('ctl');
+    if(k==='FM'){ f.start.value='88e6'; f.stop.value='108e6'; f.step.value='2.4e6'; }
+    if(k==='2m'){ f.start.value='144e6'; f.stop.value='148e6'; f.step.value='1.2e6'; }
+    if(k==='70cm'){ f.start.value='420e6'; f.stop.value='450e6'; f.step.value='2.4e6'; }
+    if(k==='AIS'){ f.start.value='161.975e6'; f.stop.value='162.025e6'; f.step.value='200e3'; }
+  }
+
+  document.getElementById('ctl').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const body = Object.fromEntries(fd.entries());
+    // numeric fields
+    const maybeNum = (k)=>{ if(body[k]!==undefined && body[k]!=='' && !isNaN(Number(body[k]))) body[k] = Number(body[k]); };
+    ['start','stop','step','samp_rate','fft','avg','threshold_db','guard_bins','min_width_bins','cfar_train','cfar_guard','cfar_quantile','cfar_alpha_db','new_ema_occ','sleep_between_sweeps','repeat'].forEach(maybeNum);
+    // mode flags
+    if(body.mode==='loop'){ body.loop = true; }
+    if(body.mode==='repeat'){ body.repeat = body.repeat||1; }
+    if(body.mode==='duration'){ /* keep duration string */ }
+    delete body.mode;
+    // booleans
+    if(body.notify==='on'){ body.notify = true; }
+
+    fetch('/api/scans', { method:'POST', headers: authHeaders(), body: JSON.stringify(body) })
+      .then(r=>r.json()).then(j=>{ setState(j.status?.state||'running'); }).catch(console.error);
+  });
+  document.getElementById('stopBtn').onclick = ()=>{
+    fetch('/api/scans/active', { method:'DELETE', headers: authHeaders() })
+      .then(()=>setState('idle')).catch(console.error);
+  };
+  async function poll(){
+    try{ const r = await fetch('/api/now', {headers: authHeaders()}); const j = await r.json(); setState(j.state||j.status?.state||'idle'); }catch(e){}
+    setTimeout(poll, 1000);
+  }
+  poll();
+  // SSE logs
+  const log = document.getElementById('log');
+  const es = new EventSource('/api/logs');
+  es.onmessage = (e)=>{ log.textContent += e.data + "\n"; log.scrollTop = log.scrollHeight; };
+  es.onerror = ()=>{ /* ignore */ };
+  </script>
+
+{% elif page == 'dashboard' %}
   <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
     <div class="stat"><div class="text-xs uppercase muted">Scans</div><div class="text-2xl font-semibold">{{ scans_total }}</div></div>
     <div class="stat"><div class="text-xs uppercase muted">Detections</div><div class="text-2xl font-semibold">{{ detections_total }}</div></div>
@@ -169,144 +295,21 @@ HTML = r"""
       {% endif %}
     </div>
   </section>
-
 {% elif page == 'detections' %}
-  <section class="card">
-    <div class="flex items-end gap-3 flex-wrap">
-      <div class="grow">
-        <h2 class="text-lg font-semibold">Detections</h2>
-        <div class="text-xs muted">{{ total }} total</div>
-      </div>
-      <a class="btn" href="/export/detections.csv?{{ qs }}">Export CSV</a>
-    </div>
-
-    <form class="mt-4 grid grid-cols-2 md:grid-cols-6 gap-3" method="get" action="/detections">
-      <select name="service" class="input">
-        <option value="">Service: any</option>
-        {% for s in services %}
-          <option value="{{ s }}" {% if req_args.get('service')==s %}selected{% endif %}>{{ s }}</option>
-        {% endfor %}
-      </select>
-      <input class="input" type="number" step="0.1" name="min_snr" value="{{ req_args.get('min_snr','') }}" placeholder="Min SNR dB" />
-      <input class="input" type="number" step="0.1" name="f_min_mhz" value="{{ req_args.get('f_min_mhz','') }}" placeholder="Min MHz" />
-      <input class="input" type="number" step="0.1" name="f_max_mhz" value="{{ req_args.get('f_max_mhz','') }}" placeholder="Max MHz" />
-      <input class="input" type="number" step="1" name="since_hours" value="{{ req_args.get('since_hours','') }}" placeholder="Last N hours" />
-      <button class="btn" type="submit">Apply</button>
-    </form>
-
-    <div id="detections-table" class="mt-4">
-      <table class="table">
-        <thead><tr class="text-slate-400"><th class="th">Time (UTC)</th><th class="th">Scan</th><th class="th">Center (MHz)</th><th class="th">Low–High (MHz)</th><th class="th">Peak (dB)</th><th class="th">Noise (dB)</th><th class="th">SNR (dB)</th><th class="th">Service</th><th class="th">Region</th><th class="th">Notes</th></tr></thead>
-        <tbody>
-        {% for r in rows %}
-          <tr class="hover:bg-white/5">
-            <td class="td">{{ r.time_utc }}</td><td class="td">{{ r.scan_id }}</td>
-            <td class="td">{{ (r.f_center_hz/1e6)|round(6) }}</td>
-            <td class="td">{{ (r.f_low_hz/1e6)|round(6) }}–{{ (r.f_high_hz/1e6)|round(6) }}</td>
-            <td class="td">{{ '%.1f' % r.peak_db if r.peak_db is not none else '' }}</td>
-            <td class="td">{{ '%.1f' % r.noise_db if r.noise_db is not none else '' }}</td>
-            <td class="td">{{ '%.1f' % r.snr_db if r.snr_db is not none else '' }}</td>
-            <td class="td"><span class="chip">{{ r.service or 'Unknown' }}</span></td>
-            <td class="td">{{ r.region or '' }}</td>
-            <td class="td truncate max-w-[24ch]" title="{{ r.notes or '' }}">{{ r.notes or '' }}</td>
-          </tr>
-        {% else %}
-          <tr><td class="td" colspan="10">No detections found.</td></tr>
-        {% endfor %}
-        </tbody>
-      </table>
-
-      <div class="mt-3 flex items-center gap-2">
-        {% set pages = (total // page_size) + (1 if (total % page_size) else 0) %}
-        <div>Page {{ page_num }} / {{ pages if pages else 1 }}</div>
-        <form method="get" action="/detections" class="flex items-center gap-2">
-          <input type="hidden" name="page_size" value="{{ page_size }}" />
-          <input type="hidden" name="service" value="{{ req_args.get('service','') }}" />
-          <input type="hidden" name="min_snr" value="{{ req_args.get('min_snr','') }}" />
-          <input type="hidden" name="f_min_mhz" value="{{ req_args.get('f_min_mhz','') }}" />
-          <input type="hidden" name="f_max_mhz" value="{{ req_args.get('f_max_mhz','') }}" />
-          <input type="hidden" name="since_hours" value="{{ req_args.get('since_hours','') }}" />
-          <button class="btn" name="page" value="{{ 1 if page_num<=1 else page_num-1 }}">Prev</button>
-          <button class="btn" name="page" value="{{ pages if page_num>=pages else page_num+1 }}">Next</button>
-        </form>
-        <form method="get" action="/detections" class="ml-auto">
-          <input type="hidden" name="service" value="{{ req_args.get('service','') }}" />
-          <input type="hidden" name="min_snr" value="{{ req_args.get('min_snr','') }}" />
-          <input type="hidden" name="f_min_mhz" value="{{ req_args.get('f_min_mhz','') }}" />
-          <input type="hidden" name="f_max_mhz" value="{{ req_args.get('f_max_mhz','') }}" />
-          <input type="hidden" name="since_hours" value="{{ req_args.get('since_hours','') }}" />
-          <select name="page_size" class="input" onchange="this.form.submit()">
-            {% for sz in [25,50,100,200] %}
-              <option value="{{ sz }}" {% if page_size==sz %}selected{% endif %}>{{ sz }} / page</option>
-            {% endfor %}
-          </select>
-        </form>
-      </div>
-    </div>
-  </section>
-
+  {{ detections_html|safe }}
 {% elif page == 'scans' %}
-  <section class="card">
-    <div class="flex items-end gap-3 flex-wrap"><div class="grow"><h2 class="text-lg font-semibold">Scans</h2><div class="text-xs muted">{{ total }} total</div></div></div>
-    <div class="mt-4">
-      <table class="table">
-        <thead><tr class="text-slate-400"><th class="th">ID</th><th class="th">Start (UTC)</th><th class="th">End (UTC)</th><th class="th">Range (MHz)</th><th class="th">Step (Hz)</th><th class="th">Rate (Hz)</th><th class="th">FFT</th><th class="th">Avg</th><th class="th">Device</th><th class="th">Driver</th></tr></thead>
-        <tbody>
-        {% for r in rows %}
-          <tr class="hover:bg-white/5"><td class="td">{{ r.id }}</td><td class="td">{{ r.t_start_utc }}</td><td class="td">{{ r.t_end_utc }}</td><td class="td">{{ (r.f_start_hz/1e6)|round(3) }}–{{ (r.f_stop_hz/1e6)|round(3) }}</td><td class="td">{{ r.step_hz }}</td><td class="td">{{ r.samp_rate }}</td><td class="td">{{ r.fft }}</td><td class="td">{{ r.avg }}</td><td class="td">{{ r.device }}</td><td class="td">{{ r.driver }}</td></tr>
-        {% else %}
-          <tr><td class="td" colspan="10">No scans found.</td></tr>
-        {% endfor %}
-        </tbody>
-      </table>
-      <div class="mt-3 flex items-center gap-2">
-        {% set pages = (total // page_size) + (1 if (total % page_size) else 0) %}
-        <div>Page {{ page_num }} / {{ pages if pages else 1 }}</div>
-        <form method="get" action="/scans" class="flex items-center gap-2">
-          <input type="hidden" name="page_size" value="{{ page_size }}" />
-          <button class="btn" name="page" value="{{ 1 if page_num<=1 else page_num-1 }}">Prev</button>
-          <button class="btn" name="page" value="{{ pages if page_num>=pages else page_num+1 }}">Next</button>
-        </form>
-        <form method="get" action="/scans" class="ml-auto">
-          <select name="page_size" class="input" onchange="this.form.submit()">
-            {% for sz in [25,50,100,200] %}
-              <option value="{{ sz }}" {% if page_size==sz %}selected{% endif %}>{{ sz }} / page</option>
-            {% endfor %}
-          </select>
-        </form>
-      </div>
-    </div>
-  </section>
-
+  {{ scans_html|safe }}
 {% elif page == 'baseline' %}
-  <section class="card">
-    <div class="flex items-end gap-3 flex-wrap"><div class="grow"><h2 class="text-lg font-semibold">Baseline (EMA around frequency)</h2><div class="text-xs muted">Peek at ema_occ & ema_power_db near a center frequency.</div></div></div>
-    <form class="mt-4 grid grid-cols-2 md:grid-cols-6 gap-3" method="get" action="/baseline">
-      <input class="input" type="number" step="0.000001" name="f_mhz" value="{{ req_args.get('f_mhz','') }}" placeholder="Center MHz" />
-      <input class="input" type="number" step="1" name="window_khz" value="{{ req_args.get('window_khz','50') }}" placeholder="±kHz window" />
-      <button class="btn" type="submit">Show</button>
-    </form>
-    <div class="mt-4">
-      <table class="table">
-        <thead><tr class="text-slate-400"><th class="th">Bin (MHz)</th><th class="th">EMA occ</th><th class="th">EMA power (dB)</th><th class="th">Last seen (UTC)</th><th class="th">Obs</th><th class="th">Hits</th></tr></thead>
-        <tbody>
-        {% for r in rows %}
-          <tr class="hover:bg-white/5"><td class="td">{{ (r.bin_hz/1e6)|round(6) }}</td><td class="td">{{ '%.3f' % r.ema_occ if r.ema_occ is not none else '' }}</td><td class="td">{{ '%.1f' % r.ema_power_db if r.ema_power_db is not none else '' }}</td><td class="td">{{ r.last_seen_utc }}</td><td class="td">{{ r.total_obs }}</td><td class="td">{{ r.hits }}</td></tr>
-        {% else %}
-          <tr><td class="td" colspan="6">Enter a frequency to view baseline bins.</td></tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </section>
-
+  {{ baseline_html|safe }}
 {% endif %}
 </main>
 </body>
 </html>
 """
 
-# --- DB helpers ---
+# ================================
+# DB helpers
+# ================================
 
 def open_db_ro(path: str) -> sqlite3.Connection:
     abspath = os.path.abspath(path)
@@ -315,29 +318,25 @@ def open_db_ro(path: str) -> sqlite3.Connection:
     con.row_factory = lambda cur, row: {d[0]: row[i] for i, d in enumerate(cur.description)}
     return con
 
-def q1(con: sqlite3.Connection, sql: str, params: Tuple[Any, ...] = ()):
+def q1(con: sqlite3.Connection, sql: str, params: Tuple[Any, ...] = ()):  # one row
     cur = con.execute(sql, params)
     return cur.fetchone()
 
-def qa(con: sqlite3.Connection, sql: str, params: Tuple[Any, ...] = ()):
+def qa(con: sqlite3.Connection, sql: str, params: Tuple[Any, ...] = ()):  # all rows
     cur = con.execute(sql, params)
     return cur.fetchall()
 
-# --- helpers for stats/graphs (compute pixel heights on server) ---
+# ================================
+# Stats/graphs helpers
+# ================================
 
 def _percentile(xs: List[float], p: float) -> Optional[float]:
-    if not xs:
-        return None
-    xs = sorted(xs)
-    k = (len(xs) - 1) * p
-    f = int(math.floor(k))
-    c = int(math.ceil(k))
-    if f == c:
-        return float(xs[f])
+    if not xs: return None
+    xs = sorted(xs); k = (len(xs) - 1) * p; f = int(math.floor(k)); c = int(math.ceil(k))
+    if f == c: return float(xs[f])
     return float(xs[f] + (xs[c] - xs[f]) * (k - f))
 
 def _scale_counts_to_px(series: List[Dict[str, Any]], count_key: str = "count") -> None:
-    """Adds height_px to each dict based on max(count). Non-zero counts get a 2px min height."""
     maxc = max((int(x.get(count_key, 0)) for x in series), default=0)
     for x in series:
         c = int(x.get(count_key, 0))
@@ -351,10 +350,8 @@ def snr_histogram(con: sqlite3.Connection, bucket_db: int = 3):
     rows = qa(con, "SELECT snr_db FROM detections WHERE snr_db IS NOT NULL")
     vals: List[float] = []
     for r in rows:
-        try:
-            vals.append(float(r['snr_db']))
-        except Exception:
-            pass
+        try: vals.append(float(r['snr_db']))
+        except Exception: pass
     buckets: Dict[int, int] = {}
     for s in vals:
         b = int(math.floor(s / bucket_db)) * bucket_db
@@ -364,12 +361,7 @@ def snr_histogram(con: sqlite3.Connection, bucket_db: int = 3):
     _scale_counts_to_px(hist, "count")
     stats = None
     if vals:
-        stats = {
-            "count": len(vals),
-            "p50": _percentile(vals, 0.50) or 0.0,
-            "p90": _percentile(vals, 0.90) or 0.0,
-            "p100": max(vals),
-        }
+        stats = {"count": len(vals), "p50": _percentile(vals, 0.50) or 0.0, "p90": _percentile(vals, 0.90) or 0.0, "p100": max(vals)}
     return hist, stats
 
 def detections_by_hour(con: sqlite3.Connection, hours: int = 24):
@@ -402,15 +394,10 @@ def frequency_bins_latest_scan(con: sqlite3.Connection, num_bins: int = 40):
     width = (f1 - f0) / max(1, num_bins)
     bins = [{"count":0, "mhz_start": (f0 + i*width)/1e6, "mhz_end": (f0 + (i+1)*width)/1e6} for i in range(num_bins)]
     for r in dets:
-        try:
-            fc = float(r['f_center_hz'])
-        except Exception:
-            continue
-        if fc < f0 or fc >= f1:
-            continue
-        idx = int((fc - f0) // width)
-        idx = max(0, min(num_bins-1, idx))
-        bins[idx]["count"] += 1
+        try: fc = float(r['f_center_hz'])
+        except Exception: continue
+        if fc < f0 or fc >= f1: continue
+        idx = int((fc - f0) // width); idx = max(0, min(num_bins-1, idx)); bins[idx]["count"] += 1
     _scale_counts_to_px(bins, "count")
     return bins, latest
 
@@ -423,15 +410,140 @@ def strongest_signals(con: sqlite3.Connection, limit: int = 10):
         LIMIT ?
     """, (limit,))
 
-# --- Flask ---
+# ================================
+# Process Manager
+# ================================
+class ScanManager:
+    def __init__(self, db_path: str):
+        self.proc: Optional[subprocess.Popen] = None
+        self.logs_q: "queue.Queue[str]" = queue.Queue(maxsize=2000)
+        self.status: Dict[str, Any] = {"state": "idle", "pid": None, "started_at": None, "params": None}
+        self.db_path = db_path
+        self._pump_thread: Optional[threading.Thread] = None
+
+    def _to_args(self, p: Dict[str, Any]) -> List[str]:
+        args: List[str] = []
+        def add(flag: str, val: Any=None):
+            if val is None or val=="": return
+            args.append(flag); args.append(str(val))
+        # Required
+        add("--start", p.get("start"))
+        add("--stop", p.get("stop"))
+        # Optional core
+        add("--step", p.get("step"))
+        add("--samp-rate", p.get("samp_rate"))
+        add("--fft", p.get("fft"))
+        add("--avg", p.get("avg"))
+        # Backend
+        if p.get("driver"): add("--driver", p.get("driver"))
+        if p.get("gain"): add("--gain", p.get("gain"))
+        # Detect
+        add("--threshold-db", p.get("threshold_db"))
+        add("--guard-bins", p.get("guard_bins"))
+        add("--min-width-bins", p.get("min_width_bins"))
+        if p.get("cfar"):
+            args += ["--cfar", str(p.get("cfar"))]
+        add("--cfar-train", p.get("cfar_train"))
+        add("--cfar-guard", p.get("cfar_guard"))
+        add("--cfar-quantile", p.get("cfar_quantile"))
+        if p.get("cfar_alpha_db") not in (None,""):
+            add("--cfar-alpha-db", p.get("cfar_alpha_db"))
+        # Misc
+        if p.get("bandplan"): add("--bandplan", p.get("bandplan"))
+        add("--db", p.get("db", self.db_path))
+        if p.get("jsonl"): add("--jsonl", p.get("jsonl"))
+        if p.get("notify") is True: args.append("--notify")
+        add("--new-ema-occ", p.get("new_ema_occ"))
+        # Modes (mutually exclusive in CLI)
+        if p.get("loop"): args.append("--loop")
+        if p.get("repeat") not in (None,""):
+            add("--repeat", p.get("repeat"))
+        if p.get("duration") not in (None,""):
+            add("--duration", p.get("duration"))
+        add("--sleep-between-sweeps", p.get("sleep_between_sweeps"))
+        return args
+
+    def start(self, params: Dict[str, Any]):
+        if self.proc and self.proc.poll() is None:
+            raise RuntimeError("Scan already running")
+        # Ensure DB path is set
+        if not params.get("db"): params["db"] = self.db_path
+        cmd = [os.fspath(sys.executable), SDRWATCH_BIN] + self._to_args(params)
+        self._emit(f"Launching: {' '.join(shlex.quote(c) for c in cmd)}")
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        self.status.update({"state":"running","pid":self.proc.pid,"started_at":time.time(),"params":params})
+        self._pump_thread = threading.Thread(target=self._pump, daemon=True)
+        self._pump_thread.start()
+
+    def stop(self):
+        if not self.proc or self.proc.poll() is not None:
+            return
+        try:
+            self._emit("Stopping scan (SIGTERM)…")
+            self.proc.send_signal(signal.SIGTERM)
+            try:
+                self.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self._emit("Force killing scan (SIGKILL)…")
+                self.proc.kill()
+        finally:
+            self.proc = None
+            self.status.update({"state":"idle","pid":None})
+
+    def _pump(self):
+        assert self.proc is not None
+        for line in self.proc.stdout or []:
+            self._emit(line.rstrip("\n"))
+        rc = self.proc.wait()
+        self._emit(f"Process exited with code {rc}")
+        self.status.update({"state":"idle","pid":None})
+        self.proc = None
+
+    def _emit(self, line: str):
+        try:
+            self.logs_q.put_nowait(line)
+        except queue.Full:
+            try: self.logs_q.get_nowait()
+            except Exception: pass
+            try: self.logs_q.put_nowait(line)
+            except Exception: pass
+
+    def stream_logs(self):
+        # Generator for SSE
+        yield "retry: 1000\n\n"
+        while True:
+            try:
+                line = self.logs_q.get(timeout=1.0)
+                yield f"data: {line}\n\n"
+            except queue.Empty:
+                # heartbeat to keep connection alive
+                yield ":\n\n"
+
+# ================================
+# Flask app
+# ================================
 
 def create_app(db_path: str) -> Flask:
     app = Flask(__name__)
     app._con = open_db_ro(db_path)
+    app._mgr = ScanManager(db_path)
+    app._db_path = db_path
 
-    def con():
-        return app._con
+    def con(): return app._con
 
+    def require_auth():
+        if not API_TOKEN:
+            return  # auth disabled
+        hdr = request.headers.get("Authorization", "")
+        if hdr != f"Bearer {API_TOKEN}":
+            abort(401)
+
+    # ---------- Pages ----------
+    @app.get('/control')
+    def control():
+        return render_template_string(HTML, page='control', db_path=app._db_path)
+
+    # Dashboard/Datasets (reuse old markup as partials)
     @app.route('/')
     def dashboard():
         scans_total = q1(con(), "SELECT COUNT(*) AS c FROM scans")['c'] or 0
@@ -497,7 +609,73 @@ def create_app(db_path: str) -> Flask:
         sv = [r['service'] for r in qa(con(), "SELECT DISTINCT COALESCE(service,'Unknown') AS service FROM detections ORDER BY service")]
         qs = args.to_dict(flat=True)
         qs = "&".join([f"{k}={v}" for k,v in qs.items()])
-        return render_template_string(HTML, page='detections', rows=rows, page_num=page, page_size=page_size, total=total, services=sv, req_args=args, qs=qs)
+        # build partial
+        detections_html = render_template_string(r"""
+  <section class="card">
+    <div class="flex items-end gap-3 flex-wrap">
+      <div class="grow"><h2 class="text-lg font-semibold">Detections</h2><div class="text-xs muted">{{ total }} total</div></div>
+      <a class="btn" href="/export/detections.csv?{{ qs }}">Export CSV</a>
+    </div>
+    <form class="mt-4 grid grid-cols-2 md:grid-cols-6 gap-3" method="get" action="/detections">
+      <select name="service" class="input">
+        <option value="">Service: any</option>
+        {% for s in services %}<option value="{{ s }}" {% if req_args.get('service')==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+      </select>
+      <input class="input" type="number" step="0.1" name="min_snr" value="{{ req_args.get('min_snr','') }}" placeholder="Min SNR dB" />
+      <input class="input" type="number" step="0.1" name="f_min_mhz" value="{{ req_args.get('f_min_mhz','') }}" placeholder="Min MHz" />
+      <input class="input" type="number" step="0.1" name="f_max_mhz" value="{{ req_args.get('f_max_mhz','') }}" placeholder="Max MHz" />
+      <input class="input" type="number" step="1" name="since_hours" value="{{ req_args.get('since_hours','') }}" placeholder="Last N hours" />
+      <button class="btn" type="submit">Apply</button>
+    </form>
+    <div id="detections-table" class="mt-4">
+      <table class="table">
+        <thead><tr class="text-slate-400"><th class="th">Time (UTC)</th><th class="th">Scan</th><th class="th">Center (MHz)</th><th class="th">Low–High (MHz)</th><th class="th">Peak (dB)</th><th class="th">Noise (dB)</th><th class="th">SNR (dB)</th><th class="th">Service</th><th class="th">Region</th><th class="th">Notes</th></tr></thead>
+        <tbody>
+          {% for r in rows %}
+            <tr class="hover:bg-white/5">
+              <td class="td">{{ r.time_utc }}</td><td class="td">{{ r.scan_id }}</td>
+              <td class="td">{{ (r.f_center_hz/1e6)|round(6) }}</td>
+              <td class="td">{{ (r.f_low_hz/1e6)|round(6) }}–{{ (r.f_high_hz/1e6)|round(6) }}</td>
+              <td class="td">{{ '%.1f' % r.peak_db if r.peak_db is not none else '' }}</td>
+              <td class="td">{{ '%.1f' % r.noise_db if r.noise_db is not none else '' }}</td>
+              <td class="td">{{ '%.1f' % r.snr_db if r.snr_db is not none else '' }}</td>
+              <td class="td"><span class="chip">{{ r.service or 'Unknown' }}</span></td>
+              <td class="td">{{ r.region or '' }}</td>
+              <td class="td truncate max-w-[24ch]" title="{{ r.notes or '' }}">{{ r.notes or '' }}</td>
+            </tr>
+          {% else %}<tr><td class="td" colspan="10">No detections found.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+      <div class="mt-3 flex items-center gap-2">
+        {% set pages = (total // page_size) + (1 if (total % page_size) else 0) %}
+        <div>Page {{ page_num }} / {{ pages if pages else 1 }}</div>
+        <form method="get" action="/detections" class="flex items-center gap-2">
+          <input type="hidden" name="page_size" value="{{ page_size }}" />
+          <input type="hidden" name="service" value="{{ req_args.get('service','') }}" />
+          <input type="hidden" name="min_snr" value="{{ req_args.get('min_snr','') }}" />
+          <input type="hidden" name="f_min_mhz" value="{{ req_args.get('f_min_mhz','') }}" />
+          <input type="hidden" name="f_max_mhz" value="{{ req_args.get('f_max_mhz','') }}" />
+          <input type="hidden" name="since_hours" value="{{ req_args.get('since_hours','') }}" />
+          <button class="btn" name="page" value="{{ 1 if page_num<=1 else page_num-1 }}">Prev</button>
+          <button class="btn" name="page" value="{{ pages if page_num>=pages else page_num+1 }}">Next</button>
+        </form>
+        <form method="get" action="/detections" class="ml-auto">
+          <input type="hidden" name="service" value="{{ req_args.get('service','') }}" />
+          <input type="hidden" name="min_snr" value="{{ req_args.get('min_snr','') }}" />
+          <input type="hidden" name="f_min_mhz" value="{{ req_args.get('f_min_mhz','') }}" />
+          <input type="hidden" name="f_max_mhz" value="{{ req_args.get('f_max_mhz','') }}" />
+          <input type="hidden" name="since_hours" value="{{ req_args.get('since_hours','') }}" />
+          <select name="page_size" class="input" onchange="this.form.submit()">
+            {% for sz in [25,50,100,200] %}
+              <option value="{{ sz }}" {% if page_size==sz %}selected{% endif %}>{{ sz }} / page</option>
+            {% endfor %}
+          </select>
+        </form>
+      </div>
+    </div>
+  </section>
+        """, rows=rows, page_num=page, page_size=page_size, total=total, services=sv, req_args=args, qs=qs)
+        return render_template_string(HTML, page='detections', detections_html=detections_html)
 
     @app.route('/scans')
     def scans():
@@ -512,7 +690,40 @@ def create_app(db_path: str) -> Flask:
             ORDER BY COALESCE(t_end_utc,t_start_utc) DESC
             LIMIT ? OFFSET ?
         """, (page_size, offset))
-        return render_template_string(HTML, page='scans', rows=rows, page_num=page, page_size=page_size, total=total, req_args=args)
+        scans_html = render_template_string(r"""
+  <section class="card">
+    <div class="flex items-end gap-3 flex-wrap"><div class="grow"><h2 class="text-lg font-semibold">Scans</h2><div class="text-xs muted">{{ total }} total</div></div></div>
+    <div class="mt-4">
+      <table class="table">
+        <thead><tr class="text-slate-400"><th class="th">ID</th><th class="th">Start (UTC)</th><th class="th">End (UTC)</th><th class="th">Range (MHz)</th><th class="th">Step (Hz)</th><th class="th">Rate (Hz)</th><th class="th">FFT</th><th class="th">Avg</th><th class="th">Device</th><th class="th">Driver</th></tr></thead>
+        <tbody>
+        {% for r in rows %}
+          <tr class="hover:bg-white/5"><td class="td">{{ r.id }}</td><td class="td">{{ r.t_start_utc }}</td><td class="td">{{ r.t_end_utc }}</td><td class="td">{{ (r.f_start_hz/1e6)|round(3) }}–{{ (r.f_stop_hz/1e6)|round(3) }}</td><td class="td">{{ r.step_hz }}</td><td class="td">{{ r.samp_rate }}</td><td class="td">{{ r.fft }}</td><td class="td">{{ r.avg }}</td><td class="td">{{ r.device }}</td><td class="td">{{ r.driver }}</td></tr>
+        {% else %}
+          <tr><td class="td" colspan="10">No scans found.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <div class="mt-3 flex items-center gap-2">
+        {% set pages = (total // page_size) + (1 if (total % page_size) else 0) %}
+        <div>Page {{ page_num }} / {{ pages if pages else 1 }}</div>
+        <form method="get" action="/scans" class="flex items-center gap-2">
+          <input type="hidden" name="page_size" value="{{ page_size }}" />
+          <button class="btn" name="page" value="{{ 1 if page_num<=1 else page_num-1 }}">Prev</button>
+          <button class="btn" name="page" value="{{ pages if page_num>=pages else page_num+1 }}">Next</button>
+        </form>
+        <form method="get" action="/scans" class="ml-auto">
+          <select name="page_size" class="input" onchange="this.form.submit()">
+            {% for sz in [25,50,100,200] %}
+              <option value="{{ sz }}" {% if page_size==sz %}selected{% endif %}>{{ sz }} / page</option>
+            {% endfor %}
+          </select>
+        </form>
+      </div>
+    </div>
+  </section>
+        """, rows=rows, page_num=page, page_size=page_size, total=total, req_args=args)
+        return render_template_string(HTML, page='scans', scans_html=scans_html)
 
     @app.route('/baseline')
     def baseline():
@@ -529,7 +740,29 @@ def create_app(db_path: str) -> Flask:
                 WHERE bin_hz BETWEEN ? AND ?
                 ORDER BY bin_hz
             """, (center-half, center+half))
-        return render_template_string(HTML, page='baseline', rows=rows, req_args=args)
+        baseline_html = render_template_string(r"""
+  <section class="card">
+    <div class="flex items-end gap-3 flex-wrap"><div class="grow"><h2 class="text-lg font-semibold">Baseline (EMA around frequency)</h2><div class="text-xs muted">Peek at ema_occ &amp; ema_power_db near a center frequency.</div></div></div>
+    <form class="mt-4 grid grid-cols-2 md:grid-cols-6 gap-3" method="get" action="/baseline">
+      <input class="input" type="number" step="0.000001" name="f_mhz" value="{{ req_args.get('f_mhz','') }}" placeholder="Center MHz" />
+      <input class="input" type="number" step="1" name="window_khz" value="{{ req_args.get('window_khz','50') }}" placeholder="±kHz window" />
+      <button class="btn" type="submit">Show</button>
+    </form>
+    <div class="mt-4">
+      <table class="table">
+        <thead><tr class="text-slate-400"><th class="th">Bin (MHz)</th><th class="th">EMA occ</th><th class="th">EMA power (dB)</th><th class="th">Last seen (UTC)</th><th class="th">Obs</th><th class="th">Hits</th></tr></thead>
+        <tbody>
+        {% for r in rows %}
+          <tr class="hover:bg-white/5"><td class="td">{{ (r.bin_hz/1e6)|round(6) }}</td><td class="td">{{ '%.3f' % r.ema_occ if r.ema_occ is not none else '' }}</td><td class="td">{{ '%.1f' % r.ema_power_db if r.ema_power_db is not none else '' }}</td><td class="td">{{ r.last_seen_utc }}</td><td class="td">{{ r.total_obs }}</td><td class="td">{{ r.hits }}</td></tr>
+        {% else %}
+          <tr><td class="td" colspan="6">Enter a frequency to view baseline bins.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+        """, rows=rows, req_args=args)
+        return render_template_string(HTML, page='baseline', baseline_html=baseline_html)
 
     @app.route('/export/detections.csv')
     def export_csv():
@@ -557,7 +790,47 @@ def create_app(db_path: str) -> Flask:
         buf.seek(0)
         return Response(buf.read(), mimetype='text/csv', headers={'Content-Disposition':'attachment; filename=detections.csv'})
 
+    # ---------- API ----------
+    @app.post('/api/scans')
+    def api_start_scan():
+        require_auth()
+        params = request.get_json(force=True, silent=False) or {}
+        # Quick param validation
+        def need(k):
+            if k not in params or params[k] in (None,""):
+                abort(400, description=f"Missing required field: {k}")
+        for k in ("start","stop"):
+            need(k)
+        # Guard: running?
+        if app._mgr.proc and app._mgr.proc.poll() is None:
+            abort(409, description="Scan already running")
+        try:
+            app._mgr.start(params)
+        except Exception as e:
+            abort(400, description=str(e))
+        return jsonify({"ok": True, "status": app._mgr.status})
+
+    @app.delete('/api/scans/<scan_id>')  # scan_id ignored for now; single active scan
+    def api_stop_scan(scan_id: str):
+        require_auth()
+        app._mgr.stop()
+        return jsonify({"ok": True})
+
+    @app.get('/api/now')
+    def api_now():
+        require_auth()
+        return jsonify(app._mgr.status)
+
+    @app.get('/api/logs')
+    def api_logs():
+        # Logs are viewable without auth to simplify local debugging; add require_auth() if desired
+        return Response(app._mgr.stream_logs(), mimetype='text/event-stream')
+
     return app
+
+# ================================
+# CLI
+# ================================
 
 def parse_args():
     ap = argparse.ArgumentParser()
@@ -569,4 +842,4 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
     app = create_app(args.db)
-    app.run(host=args.host, port=args.port)
+    app.run(host=args.host, port=args.port, threaded=True)
