@@ -7,6 +7,12 @@ Run:
 Adds a minimal process manager to launch/stop sdrwatch.py with JSON params,
 Server-Sent Events (SSE) live logs, and a simple Control UI. Keeps all
 previous dashboard/detections/baseline pages intact.
+
+2025-08-23 update:
+- Added "Detections by frequency (avg across scans)" graph under the existing
+  latest-scan frequency graph.
+- Added a left-side value bar (mini Y-axis with 0 / 50% / max ticks) to both
+  frequency graphs to make bar magnitudes easier to read.
 """
 from __future__ import annotations
 import argparse, os, io, sqlite3, math, threading, queue, time, shlex, signal, subprocess, json, sys
@@ -45,6 +51,13 @@ HTML = r"""
     .pill { padding:.125rem .5rem; border-radius:999px; font-size:.75rem }
     .pill.idle { background:#334155; color:#e2e8f0 }
     .pill.run { background:#16a34a; color:#052e16 }
+    .yaxis { width: 40px; position: relative; }
+    .yaxis .tick { position:absolute; left:0; right:0; font-size:10px; color:#94a3b8 }
+    .ygrid { position:relative; }
+    .ygrid::before, .ygrid::after { content:""; position:absolute; left:0; right:0; height:1px; background: rgba(255,255,255,.12); }
+    .ygrid::before { top:0; }
+    .ygrid::after { bottom:0; }
+    .ygrid .mid { position:absolute; left:0; right:0; top:50%; height:1px; background: rgba(255,255,255,.12); }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen">
@@ -115,11 +128,20 @@ HTML = r"""
     </div>
     <div class="card">
       <h3 class="text-lg font-semibold mb-2">Quick presets</h3>
-      <div class="grid grid-cols-2 gap-2 text-sm">
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
+        <button class="btn" onclick="preset('FULL')">Full sweep (24–1766 MHz)</button>
         <button class="btn" onclick="preset('FM')">FM 88–108 MHz</button>
-        <button class="btn" onclick="preset('2m')">2 m 144–148 MHz</button>
-        <button class="btn" onclick="preset('70cm')">70 cm 420–450 MHz</button>
-        <button class="btn" onclick="preset('AIS')">AIS 161.975–162.025 MHz</button>
+        <button class="btn" onclick="preset('VHF_AIR')">VHF Air 118–137</button>
+        <button class="btn" onclick="preset('UHF_MILAIR')">UHF MilAir 225–400</button>
+        <button class="btn" onclick="preset('2m')">2 m 144–146</button>
+        <button class="btn" onclick="preset('70cm')">70 cm 430–440</button>
+        <button class="btn" onclick="preset('MARINE')">Marine VHF 156–162.6</button>
+        <button class="btn" onclick="preset('NOAA')">NOAA WX 162.4–162.55</button>
+        <button class="btn" onclick="preset('AIS')">AIS 161.975–162.025</button>
+        <button class="btn" onclick="preset('ADSB')">ADS‑B 1090</button>
+        <button class="btn" onclick="preset('PMR446')">PMR446 446.0–446.2</button>
+        <button class="btn" onclick="preset('TETRA')">TETRA 390–430</button>
+        <button class="btn" onclick="preset('LTE800')">LTE 800 DL 791–821</button>
       </div>
       <div class="mt-4 text-xs muted">Edit the fields after applying a preset if needed.</div>
       <div class="mt-4 text-xs"><span class="muted">Token:</span> stored in browser localStorage as <code>SDRWATCH_TOKEN</code>.</div>
@@ -133,10 +155,25 @@ HTML = r"""
 
   function preset(k){
     const f = document.getElementById('ctl');
+    // sensible global defaults
+    f.samp_rate.value = '2.4e6';
+    f.fft.value = '4096';
+    f.avg.value = '8';
+    f.gain.value = f.gain.value || 'auto';
+
+    if(k==='FULL'){ f.start.value='24e6'; f.stop.value='1766e6'; f.step.value='2.4e6'; }
     if(k==='FM'){ f.start.value='88e6'; f.stop.value='108e6'; f.step.value='2.4e6'; }
-    if(k==='2m'){ f.start.value='144e6'; f.stop.value='148e6'; f.step.value='1.2e6'; }
-    if(k==='70cm'){ f.start.value='420e6'; f.stop.value='450e6'; f.step.value='2.4e6'; }
+    if(k==='VHF_AIR'){ f.start.value='118e6'; f.stop.value='137e6'; f.step.value='500e3'; }
+    if(k==='UHF_MILAIR'){ f.start.value='225e6'; f.stop.value='400e6'; f.step.value='2.4e6'; }
+    if(k==='2m'){ f.start.value='144e6'; f.stop.value='146e6'; f.step.value='1.2e6'; }
+    if(k==='70cm'){ f.start.value='430e6'; f.stop.value='440e6'; f.step.value='2.4e6'; }
+    if(k==='MARINE'){ f.start.value='156e6'; f.stop.value='162.6e6'; f.step.value='1.2e6'; }
+    if(k==='NOAA'){ f.start.value='162.4e6'; f.stop.value='162.55e6'; f.step.value='100e3'; }
     if(k==='AIS'){ f.start.value='161.975e6'; f.stop.value='162.025e6'; f.step.value='200e3'; }
+    if(k==='ADSB'){ f.start.value='1089e6'; f.stop.value='1091e6'; f.step.value='2.4e6'; }
+    if(k==='PMR446'){ f.start.value='446.0e6'; f.stop.value='446.2e6'; f.step.value='200e3'; }
+    if(k==='TETRA'){ f.start.value='390e6'; f.stop.value='430e6'; f.step.value='2.4e6'; }
+    if(k==='LTE800'){ f.start.value='791e6'; f.stop.value='821e6'; f.step.value='2.4e6'; }
   }
 
   document.getElementById('ctl').addEventListener('submit', async (e)=>{
@@ -235,12 +272,24 @@ HTML = r"""
         {% if latest %}<div class="text-xs muted">{{ (latest.f_start_hz/1e6)|round(3) }}–{{ (latest.f_stop_hz/1e6)|round(3) }} MHz • bins={{ freq_bins|length }}{% endif %}</div>
       </div>
       {% if freq_bins and freq_bins | length > 0 %}
-        <div class="flex gap-[2px] items-end" style="height: {{ chart_px }}px">
-          {% for b in freq_bins %}
-            <div class="flex flex-col items-center" title="{{ '%.3f' % b.mhz_start }}–{{ '%.3f' % b.mhz_end }} MHz: {{ b.count }}">
-              <div class="w-3 bar rounded-t" style="height: {{ b.height_px }}px; background: #0ea5e9;"></div>
+        <div class="flex items-end gap-3">
+          <!-- left value bar -->
+          <div class="yaxis" style="height: {{ chart_px }}px">
+            <div class="tick" style="top:-6px">{{ freq_max }}</div>
+            <div class="tick" style="top: calc(50% - 6px);">{{ '%d' % (freq_max/2) }}</div>
+            <div class="tick" style="bottom:-6px">0</div>
+          </div>
+          <!-- chart with subtle grid lines -->
+          <div class="ygrid" style="height: {{ chart_px }}px; width:100%">
+            <div class="mid"></div>
+            <div class="flex gap-[2px] items-end h-full">
+              {% for b in freq_bins %}
+                <div class="flex flex-col items-center" title="{{ '%.3f' % b.mhz_start }}–{{ '%.3f' % b.mhz_end }} MHz: {{ b.count }}">
+                  <div class="w-3 bar rounded-t" style="height: {{ b.height_px }}px; background: #0ea5e9;"></div>
+                </div>
+              {% endfor %}
             </div>
-          {% endfor %}
+          </div>
         </div>
         <div class="flex justify-between text-[10px] muted mt-1">
           <div>{{ '%.3f' % freq_bins[0].mhz_start }} MHz</div>
@@ -271,6 +320,44 @@ HTML = r"""
         {% endfor %}
         </tbody>
       </table>
+    </div>
+  </section>
+
+  <!-- NEW: averaged-by-frequency across all scans -->
+  <section class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4">
+    <div class="card lg:col-span-2">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-lg font-semibold">Detections by frequency (avg across scans)</h2>
+        {% if avg_bins and avg_bins|length>0 %}
+          <div class="text-xs muted">{{ '%.3f' % avg_start_mhz }}–{{ '%.3f' % avg_stop_mhz }} MHz • bins={{ avg_bins|length }} • avg per covered-scan</div>
+        {% endif %}
+      </div>
+      {% if avg_bins and avg_bins | length > 0 %}
+        <div class="flex items-end gap-3">
+          <!-- left value bar -->
+          <div class="yaxis" style="height: {{ chart_px }}px">
+            <div class="tick" style="top:-6px">{{ '%.1f' % avg_max }}</div>
+            <div class="tick" style="top: calc(50% - 6px);">{{ '%.1f' % (avg_max/2) }}</div>
+            <div class="tick" style="bottom:-6px">0</div>
+          </div>
+          <div class="ygrid" style="height: {{ chart_px }}px; width:100%">
+            <div class="mid"></div>
+            <div class="flex gap-[2px] items-end h-full">
+              {% for b in avg_bins %}
+                <div class="flex flex-col items-center" title="{{ '%.3f' % b.mhz_start }}–{{ '%.3f' % b.mhz_end }} MHz: avg {{ '%.2f' % b.count }} ({{ b.coverage }} scans)">
+                  <div class="w-3 bar rounded-t" style="height: {{ b.height_px }}px; background: #0ea5e9;"></div>
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        <div class="flex justify-between text-[10px] muted mt-1">
+          <div>{{ '%.3f' % avg_bins[0].mhz_start }} MHz</div>
+          <div>{{ '%.3f' % avg_bins[-1].mhz_end }} MHz</div>
+        </div>
+      {% else %}
+        <div class="text-sm muted">Not enough data to compute average across scans.</div>
+      {% endif %}
     </div>
   </section>
 
@@ -336,15 +423,25 @@ def _percentile(xs: List[float], p: float) -> Optional[float]:
     if f == c: return float(xs[f])
     return float(xs[f] + (xs[c] - xs[f]) * (k - f))
 
-def _scale_counts_to_px(series: List[Dict[str, Any]], count_key: str = "count") -> None:
-    maxc = max((int(x.get(count_key, 0)) for x in series), default=0)
+def _scale_counts_to_px(series: List[Dict[str, Any]], count_key: str = "count") -> float:
+    """Attach height_px to each item based on its count; return max count used for scaling.
+    Works with ints or floats. Ensures a minimum visible bar height of 2px for nonzero values."""
+    values: List[float] = []
     for x in series:
-        c = int(x.get(count_key, 0))
+        try:
+            v = float(x.get(count_key, 0) or 0)
+        except Exception:
+            v = 0.0
+        values.append(v)
+    maxc = max(values) if values else 0.0
+    for i, x in enumerate(series):
+        c = values[i]
         if maxc <= 0 or c <= 0:
             x["height_px"] = 0
         else:
-            h = int(round(c / maxc * CHART_HEIGHT_PX))
+            h = int(round((c / maxc) * CHART_HEIGHT_PX))
             x["height_px"] = max(2, h)
+    return maxc
 
 def snr_histogram(con: sqlite3.Connection, bucket_db: int = 3):
     rows = qa(con, "SELECT snr_db FROM detections WHERE snr_db IS NOT NULL")
@@ -384,13 +481,13 @@ def detections_by_hour(con: sqlite3.Connection, hours: int = 24):
 def frequency_bins_latest_scan(con: sqlite3.Connection, num_bins: int = 40):
     latest = q1(con, "SELECT id, t_start_utc, t_end_utc, f_start_hz, f_stop_hz FROM scans ORDER BY COALESCE(t_end_utc,t_start_utc) DESC LIMIT 1")
     if not latest:
-        return [], None
+        return [], None, 0
     f0 = float(latest['f_start_hz']); f1 = float(latest['f_stop_hz'])
     if not (f1 > f0):
-        return [], latest
+        return [], latest, 0
     dets = qa(con, "SELECT f_center_hz FROM detections WHERE scan_id = ?", (latest['id'],))
     if not dets:
-        return [], latest
+        return [], latest, 0
     width = (f1 - f0) / max(1, num_bins)
     bins = [{"count":0, "mhz_start": (f0 + i*width)/1e6, "mhz_end": (f0 + (i+1)*width)/1e6} for i in range(num_bins)]
     for r in dets:
@@ -398,8 +495,47 @@ def frequency_bins_latest_scan(con: sqlite3.Connection, num_bins: int = 40):
         except Exception: continue
         if fc < f0 or fc >= f1: continue
         idx = int((fc - f0) // width); idx = max(0, min(num_bins-1, idx)); bins[idx]["count"] += 1
-    _scale_counts_to_px(bins, "count")
-    return bins, latest
+    maxc = _scale_counts_to_px(bins, "count")
+    return bins, latest, int(maxc)
+
+def frequency_bins_all_scans_avg(con: sqlite3.Connection, num_bins: int = 40):
+    # Establish a global frequency span from detections (so we only plot where data exists)
+    bounds = q1(con, "SELECT MIN(f_center_hz) AS fmin, MAX(f_center_hz) AS fmax FROM detections")
+    if not bounds or bounds['fmin'] is None or bounds['fmax'] is None:
+        return [], 0.0, 0.0, 0.0
+    f0 = float(bounds['fmin']); f1 = float(bounds['fmax'])
+    if not (f1 > f0):
+        return [], 0.0, 0.0, 0.0
+    # Pre-fetch data
+    dets = qa(con, "SELECT f_center_hz FROM detections WHERE f_center_hz BETWEEN ? AND ?", (int(f0), int(f1)))
+    scans = qa(con, "SELECT f_start_hz, f_stop_hz FROM scans WHERE f_stop_hz > f_start_hz")
+    width = (f1 - f0) / max(1, num_bins)
+    bins: List[Dict[str, Any]] = [{"count":0.0, "coverage":0, "mhz_start": (f0 + i*width)/1e6, "mhz_end": (f0 + (i+1)*width)/1e6} for i in range(num_bins)]
+    # Count detections per bin (absolute)
+    for r in dets:
+        try: fc = float(r['f_center_hz'])
+        except Exception: continue
+        if fc < f0 or fc >= f1: continue
+        idx = int((fc - f0) // width); idx = max(0, min(num_bins-1, idx)); bins[idx]["count"] += 1.0
+    # Compute coverage (how many scans actually covered each bin) and convert count -> per-covered-scan average
+    for i in range(num_bins):
+        b_start = f0 + i*width
+        b_end   = f0 + (i+1)*width
+        cov = 0
+        for s in scans:
+            try:
+                s0 = float(s['f_start_hz']); s1 = float(s['f_stop_hz'])
+            except Exception:
+                continue
+            if (s0 < b_end) and (s1 > b_start):  # overlap
+                cov += 1
+        bins[i]["coverage"] = cov
+        if cov > 0:
+            bins[i]["count"] = bins[i]["count"] / float(cov)
+        else:
+            bins[i]["count"] = 0.0
+    maxc = _scale_counts_to_px(bins, "count")
+    return bins, f0/1e6, f1/1e6, maxc
 
 def strongest_signals(con: sqlite3.Connection, limit: int = 10):
     return qa(con, """
@@ -552,7 +688,8 @@ def create_app(db_path: str) -> Flask:
 
         snr_bucket_db = 3
         snr_hist, snr_stats = snr_histogram(con(), bucket_db=snr_bucket_db)
-        freq_bins, latest = frequency_bins_latest_scan(con(), num_bins=40)
+        freq_bins, latest, freq_max = frequency_bins_latest_scan(con(), num_bins=40)
+        avg_bins, avg_start_mhz, avg_stop_mhz, avg_max = frequency_bins_all_scans_avg(con(), num_bins=40)
         by_hour = detections_by_hour(con(), hours=24)
         top_services = qa(con(), "SELECT COALESCE(service,'Unknown') AS service, COUNT(*) AS count FROM detections GROUP BY COALESCE(service,'Unknown') ORDER BY count DESC LIMIT 10")
         strongest = strongest_signals(con(), limit=10)
@@ -568,6 +705,11 @@ def create_app(db_path: str) -> Flask:
             snr_stats=snr_stats,
             snr_bucket_db=snr_bucket_db,
             freq_bins=freq_bins,
+            freq_max=freq_max,
+            avg_bins=avg_bins,
+            avg_start_mhz=avg_start_mhz,
+            avg_stop_mhz=avg_stop_mhz,
+            avg_max=avg_max,
             by_hour=by_hour,
             top_services=top_services,
             strongest=strongest,
