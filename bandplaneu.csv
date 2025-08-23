@@ -1,0 +1,43 @@
+low_hz,high_hz,service,region,notes
+87500000,108000000,FM Broadcast,CEPT (EU/ITU-R1),VHF Band II per EU/Region 1; 87.5–108 MHz. citeturn2search0turn2search3
+174000000,240000000,DAB/DAB+,CEPT (EU),Primary use Band III for terrestrial digital radio. citeturn2search1
+1452000000,1492000000,DAB L-Band,CEPT (EU),Many countries no longer use L‑Band for DAB; still designated in CEPT. citeturn2search7
+108000000,117975000,Aero NAV (VOR/ILS LOC),EU/ICAO EUR,ILS localizer & VOR; upper edge 117.975 MHz. citeturn2search9
+117975000,137000000,Aero VHF COM,EU/ICAO EUR,Air‑ground voice comms; 8.33 kHz channel spacing deployed. citeturn0search1turn0search6
+136700000,136975000,VDL Mode 2 (Aviation Data Link),EU/ICAO EUR,VDL‑2 channels 136.700–136.975 MHz; 136.975 MHz common signalling channel. citeturn3search11turn3search14
+137000000,138000000,Weather/LEO sats (APT/HRPT/ORBCOMM),Global/EU,NOAA/Meteor/ORBCOMM downlinks reside in 137–138 MHz. citeturn4search14turn4search10
+156000000,162000000,Maritime VHF (voice/DSC),ITU RR App.18 (EU),Marine band including CH16 (156.8 MHz) & DSC CH70 (156.525 MHz). citeturn4search3
+161962500,161987500,AIS 1,ITU RR App.18 (EU),Automatic Identification System channel 1. citeturn4search11
+162012500,162037500,AIS 2,ITU RR App.18 (EU),Automatic Identification System channel 2. citeturn4search11
+470000000,694000000,DTT (DVB‑T/T2),EU (sub‑700 policy),UHF TV after 700 MHz clearance; PMSE secondary. citeturn2search2turn2search11
+50000000,52000000,Amateur 6 m,IARU Region 1,National variations; check country authorisations. citeturn0search8
+144000000,146000000,Amateur 2 m,IARU Region 1,Primary amateur allocation (most CEPT countries). citeturn0search3
+430000000,440000000,Amateur 70 cm,IARU Region 1,Shared with other services in some countries. citeturn0search3
+446000000,446200000,PMR446 (licence‑free),CEPT (EU),Handheld only; integral antenna; analogue & digital. citeturn5search3turn5search7
+433050000,434790000,SRD/ISM 433 MHz,CEPT (EU),Short‑range devices incl. telemetry/RC. citeturn0search0
+863000000,870000000,SRD 868 MHz,CEPT (EU),LoRa/LPWAN/alarms; sub‑bands per ERC 70‑03. citeturn0search0turn0search5
+902000000,928000000,ISM 915 MHz (US),Reference/avoid in EU,Not generally permitted for SRD in EU (listed for cross‑region awareness). citeturn5search10
+960000000,1215000000,Aero DME/SSR/ADS‑B,EU/ICAO EUR,1030/1090 MHz interrogations & ADS‑B ES at 1090 MHz. citeturn3search0turn3search3
+1164000000,1215000000,RNSS (E5/L5),CEPT (EU),Galileo/GPS L5 band; protect ARNS in band. citeturn3search10
+1258000000,1300000000,RNSS (E6) / Amateur 23 cm,CEPT (EU),Galileo E6; coexistence with 23 cm amateur per ECC. citeturn3search13
+1559000000,1610000000,RNSS (E1/L1),CEPT (EU),GPS L1/Galileo E1. citeturn3search13
+791000000,821000000,Mobile DL (Band 20 800 MHz),EU harmonised,Paired with 832–862 MHz UL (Band 20). citeturn1search2
+832000000,862000000,Mobile UL (Band 20 800 MHz),EU harmonised,Paired with 791–821 MHz DL. citeturn1search2
+703000000,733000000,Mobile UL (Band 28 700 MHz),EU harmonised,Paired with 758–788 MHz DL (n28/n12 EU variants). citeturn1search2
+758000000,788000000,Mobile DL (Band 28 700 MHz),EU harmonised,Paired with 703–733 MHz UL. citeturn1search2
+880000000,915000000,Mobile UL (GSM/UMTS/LTE 900),EU harmonised,Tech‑neutral use of 900 MHz band. citeturn1search2
+925000000,960000000,Mobile DL (GSM/UMTS/LTE 900),EU harmonised,Tech‑neutral use of 900 MHz band. citeturn1search2
+1710000000,1785000000,Mobile UL (GSM/LTE 1800),EU harmonised,Tech‑neutral 1800 MHz band. citeturn1search2
+1805000000,1880000000,Mobile DL (GSM/LTE 1800),EU harmonised,Tech‑neutral 1800 MHz band. citeturn1search2
+1920000000,1980000000,Mobile UL (UMTS/LTE 2100),EU harmonised,Paired with 2110–2170 MHz DL. citeturn1search2
+2110000000,2170000000,Mobile DL (UMTS/LTE 2100),EU harmonised,Paired with 1920–1980 MHz UL. citeturn1search2
+2500000000,2570000000,Mobile UL (LTE Band 7/38/41 part),EU harmonised (2.6 GHz),Paired with 2620–2690 MHz DL; 2570–2620 MHz TDD. citeturn1search5turn1search11
+2570000000,2620000000,Mobile TDD (Band 38),EU (where assigned),Unpaired 2.57–2.62 GHz. citeturn1search11
+2620000000,2690000000,Mobile DL (LTE Band 7),EU harmonised,Paired with 2500–2570 MHz UL. citeturn1search5
+2300000000,2400000000,Mobile TDD (Band 40),EU (country‑specific),Some Member States authorise 2.3–2.4 GHz TDD. citeturn1search2
+2400000000,2483500000,ISM/RLAN 2.4 GHz,Global/EU,Wi‑Fi/Bluetooth/SRD under EN 300 328. citeturn5search4
+5150000000,5350000000,RLAN 5 GHz (lower),CEPT (EU),WAS/RLAN indoor; DFS/TPC requirements vary. citeturn0search4turn0search14
+5470000000,5725000000,RLAN 5 GHz (upper),CEPT (EU),WAS/RLAN with DFS/TPC. citeturn0search4turn0search14
+5725000000,5875000000,SRD/ISM 5.8 GHz,CEPT (EU),Short‑range devices incl. video links; country power limits. citeturn5search0
+3300000000,3800000000,5G NR n78 (3.4–3.8 GHz),EU harmonised,Primary 5G band (TDD). citeturn1search1turn1search0
+24250000000,27500000000,5G NR n258 (26 GHz),EU harmonised,24.25–27.5 GHz mmWave for 5G. citeturn1search2
