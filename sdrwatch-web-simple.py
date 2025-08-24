@@ -7,7 +7,7 @@ and renders HTML from /templates/*.html to keep this file lean.
 
 Run (example):
   # terminal 1 (controller)
-  ./sdrwatch-control.py serve --host 127.0.0.1 --port 8765 --token secret123
+  python sdrwatch-control.py serve --host 127.0.0.1 --port 8765 --token secret123
 
   # terminal 2 (web)
   SDRWATCH_CONTROL_URL=http://127.0.0.1:8765 \
@@ -469,3 +469,4 @@ if __name__ == '__main__':
     args = parse_args()
     app = create_app(args.db)
     app.run(host=args.host, port=args.port, threaded=True)
+
