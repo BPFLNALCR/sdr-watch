@@ -44,7 +44,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np  # type: ignore
 
@@ -321,10 +321,14 @@ class Store:
 class SDRSource:
     """SoapySDR source (generic)."""
 
-    def __init__(self, driver: str, samp_rate: float, gain: str | float):
+    def __init__(self, driver: str, samp_rate: float, gain: str | float, soapy_args: Optional[Dict[str, str]] = None):
         if not HAVE_SOAPY:
             raise RuntimeError("SoapySDR not available")
-        self.dev = SoapySDR.Device(dict(driver=driver))
+        dev_args: Dict[str, str] = {"driver": driver}
+        if soapy_args:
+            # Merge caller-provided selection hints (e.g., serial=..., index=...)
+            dev_args.update({str(k): str(v) for k, v in soapy_args.items()})
+        self.dev = SoapySDR.Device(dev_args)
         self.dev.setSampleRate(SOAPY_SDR_RX, 0, samp_rate)
         if isinstance(gain, str) and gain == "auto":
             try:
@@ -582,8 +586,9 @@ def maybe_emit_jsonl(path: Optional[str], record: dict):
     if not path:
         return
     try:
-        with open(path, "a") as f:
-            f.write("" + str(record).replace("'", '"') + "\n")
+        import json
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
     except Exception:
         pass
 
@@ -713,13 +718,22 @@ def run(args):
     bandplan = Bandplan(args.bandplan)
     store = Store(args.db)
 
+    # Parse --soapy-args into a dict if present
+    soapy_args_dict: Optional[Dict[str, str]] = None
+    if getattr(args, "soapy_args", None):
+        soapy_args_dict = {}
+        for kv in str(args.soapy_args).split(","):
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                soapy_args_dict[k.strip()] = v.strip()
+
     # Select source backend
     if args.driver == "rtlsdr_native":
         src = RTLSDRSource(samp_rate=args.samp_rate, gain=args.gain)
         hwkey = "RTL-SDR (native)"
         setattr(src, 'device', hwkey)
     else:
-        src = SDRSource(driver=args.driver, samp_rate=args.samp_rate, gain=args.gain)
+        src = SDRSource(driver=args.driver, samp_rate=args.samp_rate, gain=args.gain, soapy_args=soapy_args_dict)
 
     # Determine termination policy
     duration_s = _parse_duration_to_seconds(args.duration)
@@ -786,6 +800,7 @@ def parse_args():
     p.add_argument("--avg", type=int, default=8, help="Averaging factor (segments per PSD)")
 
     p.add_argument("--driver", type=str, default="rtlsdr", help="Soapy driver key (e.g., rtlsdr, hackrf, airspy, etc.) or 'rtlsdr_native' for direct librtlsdr")
+    p.add_argument("--soapy-args", type=str, default=None, help="Comma-separated Soapy device args (e.g., 'serial=00000001,index=0')")
     p.add_argument("--gain", type=str, default="auto", help='Gain in dB or "auto"')
 
     p.add_argument("--threshold-db", type=float, default=8.0, help="Detection threshold above noise floor [dB]")
