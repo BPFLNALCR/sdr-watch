@@ -1,6 +1,7 @@
 # SDR-Watch 📡🔎
 
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
+![CI](https://github.com/<YOUR_GH_USER>/<YOUR_REPO>/actions/workflows/ci.yml/badge.svg)
 ![Platform](https://img.shields.io/badge/platform-Raspberry%20Pi%205-red)
 ![SDR](https://img.shields.io/badge/SDR-RTL--SDR-blue)
 ![Planned SDRs](https://img.shields.io/badge/Planned-HackRF%2C%20Airspy%2C%20LimeSDR%2C%20USRP-yellow)
