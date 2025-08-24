@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <div class="flex items-end gap-3 flex-wrap">
+    <div class="grow"><h2 class="text-lg font-semibold">Scans</h2><div class="text-xs muted">{{ total }} total</div></div>
+  </div>
+  <div class="mt-4">
+    <table class="table">
+      <thead><tr class="text-slate-400"><th class="th">ID</th><th class="th">Start (UTC)</th><th class="th">End (UTC)</th><th class="th">Range (MHz)</th><th class="th">Step (Hz)</th><th class="th">Rate (Hz)</th><th class="th">FFT</th><th class="th">Avg</th><th class="th">Device</th><th class="th">Driver</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr class="hover:bg-white/5"><td class="td">{{ r.id }}</td><td class="td">{{ r.t_start_utc }}</td><td class="td">{{ r.t_end_utc }}</td><td class="td">{{ (r.f_start_hz/1e6)|round(3) }}–{{ (r.f_stop_hz/1e6)|round(3) }}</td><td class="td">{{ r.step_hz }}</td><td class="td">{{ r.samp_rate }}</td><td class="td">{{ r.fft }}</td><td class="td">{{ r.avg }}</td><td class="td">{{ r.device }}</td><td class="td">{{ r.driver }}</td></tr>
+      {% else %}
+        <tr><td class="td" colspan="10">No scans found.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div class="mt-3 flex items-center gap-2">
+      {% set pages = (total // page_size) + (1 if (total % page_size) else 0) %}
+      <div>Page {{ page_num }} / {{ pages if pages else 1 }}</div>
+      <form method="get" action="/scans" class="flex items-center gap-2">
+        <input type="hidden" name="page_size" value="{{ page_size }}" />
+        <button class="btn" name="page" value="{{ 1 if page_num<=1 else page_num-1 }}">Prev</button>
+        <button class="btn" name="page" value="{{ pages if page_num>=pages else page_num+1 }}">Next</button>
+      </form>
+      <form method="get" action="/scans" class="ml-auto">
+        <select name="page_size" class="input" onchange="this.form.submit()">
+          {% for sz in [25,50,100,200] %}
+            <option value="{{ sz }}" {% if page_size==sz %}selected{% endif %}>{{ sz }} / page</option>
+          {% endfor %}
+        </select>
+      </form>
+    </div>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <div class="flex items-end gap-3 flex-wrap">
+    <div class="grow">
+      <h2 class="text-lg font-semibold">Baseline (EMA around frequency)</h2>
+      <div class="text-xs muted">Peek at ema_occ &amp; ema_power_db near a center frequency.</div>
+    </div>
+  </div>
+  <form class="mt-4 grid grid-cols-2 md:grid-cols-6 gap-3" method="get" action="/baseline">
+    <input class="input" type="number" step="0.000001" name="f_mhz" value="{{ req_args.get('f_mhz','') }}" placeholder="Center MHz" />
+    <input class="input" type="number" step="1" name="window_khz" value="{{ req_args.get('window_khz','50') }}" placeholder="±kHz window" />
+    <button class="btn" type="submit">Show</button>
+  </form>
+  <div class="mt-4">
+    <table class="table">
+      <thead><tr class="text-slate-400"><th class="th">Bin (MHz)</th><th class="th">EMA occ</th><th class="th">EMA power (dB)</th><th class="th">Last seen (UTC)</th><th class="th">Obs</th><th class="th">Hits</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr class="hover:bg-white/5"><td class="td">{{ (r.bin_hz/1e6)|round(6) }}</td><td class="td">{{ '%.3f' % r.ema_occ if r.ema_occ is not none else '' }}</td><td class="td">{{ '%.1f' % r.ema_power_db if r.ema_power_db is not none else '' }}</td><td class="td">{{ r.last_seen_utc }}</td><td class="td">{{ r.total_obs }}</td><td class="td">{{ r.hits }}</td></tr>
+      {% else %}
+        <tr><td class="td" colspan="6">Enter a frequency to view baseline bins.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

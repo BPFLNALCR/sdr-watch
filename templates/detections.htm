@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <div class="flex items-end gap-3 flex-wrap">
+    <div class="grow">
+      <h2 class="text-lg font-semibold">Detections</h2>
+      <div class="text-xs muted">{{ total }} total</div>
+    </div>
+    <a class="btn" href="/export/detections.csv?{{ qs }}">Export CSV</a>
+  </div>
+
+  <form class="mt-4 grid grid-cols-2 md:grid-cols-6 gap-3" method="get" action="/detections">
+    <select name="service" class="input">
+      <option value="">Service: any</option>
+      {% for s in services %}<option value="{{ s }}" {% if req_args.get('service')==s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+    <input class="input" type="number" step="0.1" name="min_snr" value="{{ req_args.get('min_snr','') }}" placeholder="Min SNR dB" />
+    <input class="input" type="number" step="0.1" name="f_min_mhz" value="{{ req_args.get('f_min_mhz','') }}" placeholder="Min MHz" />
+    <input class="input" type="number" step="0.1" name="f_max_mhz" value="{{ req_args.get('f_max_mhz','') }}" placeholder="Max MHz" />
+    <input class="input" type="number" step="1" name="since_hours" value="{{ req_args.get('since_hours','') }}" placeholder="Last N hours" />
+    <button class="btn" type="submit">Apply</button>
+  </form>
+
+  <div id="detections-table" class="mt-4">
+    <table class="table">
+      <thead><tr class="text-slate-400"><th class="th">Time (UTC)</th><th class="th">Scan</th><th class="th">Center (MHz)</th><th class="th">Low–High (MHz)</th><th class="th">Peak (dB)</th><th class="th">Noise (dB)</th><th class="th">SNR (dB)</th><th class="th">Service</th><th class="th">Region</th><th class="th">Notes</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+          <tr class="hover:bg-white/5">
+            <td class="td">{{ r.time_utc }}</td><td class="td">{{ r.scan_id }}</td>
+            <td class="td">{{ (r.f_center_hz/1e6)|round(6) }}</td>
+            <td class="td">{{ (r.f_low_hz/1e6)|round(6) }}–{{ (r.f_high_hz/1e6)|round(6) }}</td>
+            <td class="td">{{ '%.1f' % r.peak_db if r.peak_db is not none else '' }}</td>
+            <td class="td">{{ '%.1f' % r.noise_db if r.noise_db is not none else '' }}</td>
+            <td class="td">{{ '%.1f' % r.snr_db if r.snr_db is not none else '' }}</td>
+            <td class="td"><span class="chip">{{ r.service or 'Unknown' }}</span></td>
+            <td class="td">{{ r.region or '' }}</td>
+            <td class="td truncate max-w-[24ch]" title="{{ r.notes or '' }}">{{ r.notes or '' }}</td>
+          </tr>
+        {% else %}<tr><td class="td" colspan="10">No detections found.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+
+    <div class="mt-3 flex items-center gap-2">
+      {% set pages = (total // page_size) + (1 if (total % page_size) else 0) %}
+      <div>Page {{ page_num }} / {{ pages if pages else 1 }}</div>
+      <form method="get" action="/detections" class="flex items-center gap-2">
+        <input type="hidden" name="page_size" value="{{ page_size }}" />
+        <input type="hidden" name="service" value="{{ req_args.get('service','') }}" />
+        <input type="hidden" name="min_snr" value="{{ req_args.get('min_snr','') }}" />
+        <input type="hidden" name="f_min_mhz" value="{{ req_args.get('f_min_mhz','') }}" />
+        <input type="hidden" name="f_max_mhz" value="{{ req_args.get('f_max_mhz','') }}" />
+        <input type="hidden" name="since_hours" value="{{ req_args.get('since_hours','') }}" />
+        <button class="btn" name="page" value="{{ 1 if page_num<=1 else page_num-1 }}">Prev</button>
+        <button class="btn" name="page" value="{{ pages if page_num>=pages else page_num+1 }}">Next</button>
+      </form>
+      <form method="get" action="/detections" class="ml-auto">
+        <input type="hidden" name="service" value="{{ req_args.get('service','') }}" />
+        <input type="hidden" name="min_snr" value="{{ req_args.get('min_snr','') }}" />
+        <input type="hidden" name="f_min_mhz" value="{{ req_args.get('f_min_mhz','') }}" />
+        <input type="hidden" name="f_max_mhz" value="{{ req_args.get('f_max_mhz','') }}" />
+        <input type="hidden" name="since_hours" value="{{ req_args.get('since_hours','') }}" />
+        <select name="page_size" class="input" onchange="this.form.submit()">
+          {% for sz in [25,50,100,200] %}
+            <option value="{{ sz }}" {% if page_size==sz %}selected{% endif %}>{{ sz }} / page</option>
+          {% endfor %}
+        </select>
+      </form>
+    </div>
+  </div>
+</section>
+{% endblock %}

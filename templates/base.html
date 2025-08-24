@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SDRwatch</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .stat { border-radius: 1rem; padding: 1rem; background: #0f172a; color: #e2e8f0 }
+    .card { border-radius: 1rem; padding: 1rem; background: rgba(255,255,255,.05); color: #e2e8f0; border: 1px solid rgba(255,255,255,.1) }
+    .chip { display:inline-flex; align-items:center; padding:.125rem .5rem; border-radius:999px; font-size:.75rem; background: rgba(255,255,255,.1) }
+    .btn { display:inline-flex; gap:.5rem; align-items:center; padding:.5rem .75rem; border-radius:.75rem; background:#0284c7; color:white }
+    .btn.red { background:#ef4444 }
+    .input { padding:.5rem .75rem; border-radius:.75rem; border:1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.05); color:#e2e8f0 }
+    .table { width:100%; font-size:.9rem }
+    .th,.td { padding:.5rem .75rem; text-align:left; border-bottom:1px solid rgba(255,255,255,.1) }
+    .bar { background:#0ea5e9; }
+    .muted { color:#94a3b8 }
+    .pill { padding:.125rem .5rem; border-radius:999px; font-size:.75rem }
+    .pill.idle { background:#334155; color:#e2e8f0 }
+    .pill.run { background:#16a34a; color:#052e16 }
+    .yaxis { width: 40px; position: relative; }
+    .yaxis .tick { position:absolute; left:0; right:0; font-size:10px; color:#94a3b8 }
+    .ygrid { position:relative; }
+    .ygrid::before, .ygrid::after { content:""; position:absolute; left:0; right:0; height:1px; background: rgba(255,255,255,.12); }
+    .ygrid::before { top:0; }
+    .ygrid::after { bottom:0; }
+    .ygrid .mid { position:absolute; left:0; right:0; top:50%; height:1px; background: rgba(255,255,255,.12); }
+    .field { display:flex; flex-direction:column; gap:.25rem }
+    .field label { font-size:.7rem; color:#94a3b8 }
+    .subgrid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.75rem }
+    @media (min-width: 768px){ .subgrid{ grid-template-columns:repeat(4,minmax(0,1fr)); } }
+    .section-title{ font-size:.9rem; font-weight:600; margin:.25rem 0 .25rem; color:#e2e8f0 }
+    .hint{ font-size:.7rem; color:#94a3b8 }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+<header class="sticky top-0 z-10 backdrop-blur bg-slate-950/70 border-b border-white/10">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center gap-6">
+    <div class="text-xl font-semibold">📡 SDRwatch</div>
+    <nav class="flex items-center gap-4 text-sm">
+      <a href="/control" class="underline">Control</a>
+      <a href="/" class="underline">Dashboard</a>
+      <a href="/detections" class="underline">Detections</a>
+      <a href="/scans" class="underline">Scans</a>
+      <a href="/baseline" class="underline">Baseline</a>
+    </nav>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-4 py-6">
+  {% block content %}{% endblock %}
+</main>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

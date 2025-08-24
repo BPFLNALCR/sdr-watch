@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+  <div class="card lg:col-span-2">
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="text-lg font-semibold">SDRwatch Control</h2>
+      <div><span class="muted">State:</span> <span id="state-pill" class="pill idle">Idle</span></div>
+    </div>
+
+    <form id="ctl" class="grid gap-4">
+      <!-- Device -->
+      <div>
+        <div class="section-title">Device</div>
+        <div class="subgrid">
+          <div class="field"><label for="device_key">Select SDR</label>
+            <select id="device_key" class="input" name="device_key"></select>
+          </div>
+          <div class="field"><label for="driver">Driver (hint)</label><input id="driver" class="input" name="driver" value="rtlsdr" /></div>
+          <div class="field"><label for="gain">Gain (dB or auto)</label><input id="gain" class="input" name="gain" value="auto" placeholder="auto or number" /></div>
+          <div class="field"><label for="samp_rate">Sample rate (Hz)</label><input id="samp_rate" class="input" name="samp_rate" value="2.4e6" inputmode="numeric" /></div>
+          <div class="field"><label for="bandplan">Bandplan CSV (optional)</label><input id="bandplan" class="input" name="bandplan" value="" placeholder="bandplan.csv" /></div>
+        </div>
+        <div class="hint mt-1">Devices are enumerated from the controller. If empty, start the controller or attach an SDR.</div>
+      </div>
+
+      <!-- Sweep -->
+      <div>
+        <div class="section-title">Sweep</div>
+        <div class="subgrid">
+          <div class="field"><label for="start">Start frequency (Hz)</label><input id="start" class="input" name="start" value="88e6" inputmode="numeric" required /></div>
+          <div class="field"><label for="stop">Stop frequency (Hz)</label><input id="stop" class="input" name="stop" value="108e6" inputmode="numeric" required /></div>
+          <div class="field"><label for="step">Step (Hz)</label><input id="step" class="input" name="step" value="2.4e6" inputmode="numeric" /></div>
+          <div class="field"><label for="fft">FFT bins</label><input id="fft" class="input" name="fft" value="4096" inputmode="numeric" /></div>
+          <div class="field"><label for="avg">Averaging (frames)</label><input id="avg" class="input" name="avg" value="8" inputmode="numeric" /></div>
+          <div class="field"><label for="sleep_between_sweeps">Sleep between sweeps (s)</label><input id="sleep_between_sweeps" class="input" name="sleep_between_sweeps" value="0" inputmode="numeric" /></div>
+        </div>
+      </div>
+
+      <!-- Detection -->
+      <div>
+        <div class="section-title">Detection</div>
+        <div class="subgrid">
+          <div class="field"><label for="threshold_db">Threshold (dB above noise)</label><input id="threshold_db" class="input" name="threshold_db" value="8" inputmode="numeric" /></div>
+          <div class="field"><label for="guard_bins">Guard bins</label><input id="guard_bins" class="input" name="guard_bins" value="1" inputmode="numeric" /></div>
+          <div class="field"><label for="min_width_bins">Min width (bins)</label><input id="min_width_bins" class="input" name="min_width_bins" value="2" inputmode="numeric" /></div>
+          <div class="field"><label for="new_ema_occ">New EMA occ (0–1)</label><input id="new_ema_occ" class="input" name="new_ema_occ" value="0.02" inputmode="decimal" /></div>
+        </div>
+      </div>
+
+      <!-- CFAR -->
+      <div>
+        <div class="section-title">CFAR</div>
+        <div class="subgrid">
+          <div class="field"><label for="cfar">CFAR mode</label>
+            <select id="cfar" class="input" name="cfar">
+              <option value="os" selected>os (ordered-statistics)</option>
+              <option value="off">off</option>
+            </select>
+          </div>
+          <div class="field"><label for="cfar_train">Train cells</label><input id="cfar_train" class="input" name="cfar_train" value="24" inputmode="numeric" /></div>
+          <div class="field"><label for="cfar_guard">Guard cells</label><input id="cfar_guard" class="input" name="cfar_guard" value="4" inputmode="numeric" /></div>
+          <div class="field"><label for="cfar_quantile">Quantile (0–1)</label><input id="cfar_quantile" class="input" name="cfar_quantile" value="0.75" inputmode="decimal" /></div>
+          <div class="field"><label for="cfar_alpha_db">Alpha (dB, optional)</label><input id="cfar_alpha_db" class="input" name="cfar_alpha_db" value="" inputmode="decimal" placeholder="e.g. 2.5" /></div>
+        </div>
+        <div class="hint mt-1">If CFAR is <span class="chip">off</span>, fixed threshold is used.</div>
+      </div>
+
+      <!-- Output & Logs -->
+      <div>
+        <div class="section-title">Output & Logs</div>
+        <div class="subgrid">
+          <div class="field"><label for="db">Database path</label><input id="db" class="input" name="db" value="{{ db_path }}" /></div>
+          <div class="field"><label for="jsonl">JSONL log (optional)</label><input id="jsonl" class="input" name="jsonl" value="" placeholder="file.jsonl" /></div>
+          <label class="field"><label for="notify">Desktop notifications</label>
+            <div class="flex items-center gap-2"><input id="notify" type="checkbox" name="notify" /> <span class="hint">Browser must allow notifications</span></div>
+          </label>
+        </div>
+      </div>
+
+      <!-- Run -->
+      <div>
+        <div class="section-title">Run</div>
+        <div class="subgrid">
+          <div class="field"><label for="mode">Mode</label>
+            <select id="mode" class="input" name="mode">
+              <option value="single">Single sweep</option>
+              <option value="loop">Loop</option>
+              <option value="repeat">Repeat N</option>
+              <option value="duration">Duration</option>
+            </select>
+          </div>
+          <div class="field"><label for="repeat">Repeat count</label><input id="repeat" class="input" name="repeat" value="" inputmode="numeric" placeholder="N" /></div>
+          <div class="field"><label for="duration">Duration (e.g. 10m)</label><input id="duration" class="input" name="duration" value="" placeholder="e.g. 10m" /></div>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap gap-2 mt-1">
+        <button class="btn" type="submit">▶ Start</button>
+        <button class="btn red" type="button" id="stopBtn">■ Stop</button>
+        <button class="btn" type="button" id="resetBtn">↺ Reset</button>
+        <button class="btn" type="button" id="refreshDevicesBtn">🔄 Refresh devices</button>
+      </div>
+    </form>
+
+    <div class="mt-4">
+      <div class="text-xs muted mb-1">Live logs</div>
+      <pre id="log" style="height:260px;overflow:auto;background:#0b1220;color:#c7f9ff;padding:8px;border-radius:.75rem"></pre>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 class="text-lg font-semibold mb-2">Quick presets</h3>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
+      <button class="btn" onclick="preset('FULL')">Full sweep (24–1766 MHz)</button>
+      <button class="btn" onclick="preset('FM')">FM 88–108 MHz</button>
+      <button class="btn" onclick="preset('VHF_AIR')">VHF Air 118–137</button>
+      <button class="btn" onclick="preset('UHF_MILAIR')">UHF MilAir 225–400</button>
+      <button class="btn" onclick="preset('2m')">2 m 144–146</button>
+      <button class="btn" onclick="preset('70cm')">70 cm 430–440</button>
+      <button class="btn" onclick="preset('MARINE')">Marine VHF 156–162.6</button>
+      <button class="btn" onclick="preset('NOAA')">NOAA WX 162.4–162.55</button>
+      <button class="btn" onclick="preset('AIS')">AIS 161.975–162.025</button>
+      <button class="btn" onclick="preset('ADSB')">ADS‑B 1090</button>
+      <button class="btn" onclick="preset('PMR446')">PMR446 446.0–446.2</button>
+      <button class="btn" onclick="preset('TETRA')">TETRA 390–430</button>
+      <button class="btn" onclick="preset('LTE800')">LTE 800 DL 791–821</button>
+    </div>
+
+    <h3 class="text-lg font-semibold mt-6 mb-2">Scan parameter presets</h3>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm">
+      <button class="btn" onclick="scanPreset('FAST')">Fast Recon</button>
+      <button class="btn" onclick="scanPreset('BALANCED')">Balanced</button>
+      <button class="btn" onclick="scanPreset('FIDELITY')">High Fidelity Baseline</button>
+    </div>
+
+    <div class="mt-4 text-xs muted">Page auth token (optional) is stored as <code>SDRWATCH_TOKEN</code> in localStorage. Server uses its own controller token.</div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TOKEN = localStorage.getItem("SDRWATCH_TOKEN") || "";
+function authHeaders(){ return TOKEN ? {"Authorization":"Bearer "+TOKEN, "Content-Type":"application/json"} : {"Content-Type":"application/json"}; }
+
+const pill = document.getElementById('state-pill');
+function setState(s){ pill.textContent = s; pill.className = 'pill ' + (s==='running'?'run':'idle'); }
+
+// Form persistence
+const FORM_STORAGE_KEY = 'SDRWATCH_CTL_FORM';
+const f = document.getElementById('ctl');
+function saveForm(){ const fd = new FormData(f); const obj = Object.fromEntries(fd.entries()); obj.notify = f.notify?.checked ? 'on' : ''; localStorage.setItem(FORM_STORAGE_KEY, JSON.stringify(obj)); }
+function loadForm(){ try{ const obj = JSON.parse(localStorage.getItem(FORM_STORAGE_KEY)||'{}'); for(const [k,v] of Object.entries(obj)){ const el = f.elements[k]; if(!el) continue; if(el.type==='checkbox'){ el.checked = (v==='on'); } else { el.value = v; } } }catch(e){} }
+f.addEventListener('input', saveForm);
+document.getElementById('resetBtn')?.addEventListener('click', ()=>{ localStorage.removeItem(FORM_STORAGE_KEY); location.reload(); });
+loadForm();
+
+// Devices
+async function loadDevices(){
+  try{
+    const r = await fetch('/ctl/devices');
+    const data = await r.json();
+    const sel = document.getElementById('device_key');
+    sel.innerHTML = '';
+    if (!Array.isArray(data)) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = `(${data?.error || 'controller_error'})`;
+      sel.appendChild(opt);
+      console.error('Controller error:', data);
+      return;
+    }
+    if (data.length===0){
+      const opt = document.createElement('option'); opt.value=''; opt.textContent='(no devices)'; sel.appendChild(opt);
+    } else {
+      for(const d of data){
+        const opt = document.createElement('option');
+        opt.value = d.key; opt.textContent = d.label + ' [' + d.kind + ']';
+        sel.appendChild(opt);
+      }
+    }
+  }catch(e){ console.error(e); }
+}
+loadDevices();
+document.getElementById('refreshDevicesBtn')?.addEventListener('click', loadDevices);
+
+// Presets
+function preset(k){
+  f.samp_rate.value = '2.4e6'; f.fft.value = '4096'; f.avg.value = '8'; f.gain.value = f.gain.value || 'auto';
+  if(k==='FULL'){ f.start.value='24e6'; f.stop.value='1766e6'; f.step.value='2.4e6'; }
+  if(k==='FM'){ f.start.value='88e6'; f.stop.value='108e6'; f.step.value='2.4e6'; }
+  if(k==='VHF_AIR'){ f.start.value='118e6'; f.stop.value='137e6'; f.step.value='500e3'; }
+  if(k==='UHF_MILAIR'){ f.start.value='225e6'; f.stop.value='400e6'; f.step.value='2.4e6'; }
+  if(k==='2m'){ f.start.value='144e6'; f.stop.value='146e6'; f.step.value='1.2e6'; }
+  if(k==='70cm'){ f.start.value='430e6'; f.stop.value='440e6'; f.step.value='2.4e6'; }
+  if(k==='MARINE'){ f.start.value='156e6'; f.stop.value='162.6e6'; f.step.value='1.2e6'; }
+  if(k==='NOAA'){ f.start.value='162.4e6'; f.stop.value='162.55e6'; f.step.value='100e3'; }
+  if(k==='AIS'){ f.start.value='161.975e6'; f.stop.value='162.025e6'; f.step.value='200e3'; }
+  if(k==='ADSB'){ f.start.value='1089e6'; f.stop.value='1091e6'; f.step.value='2.4e6'; }
+  if(k==='PMR446'){ f.start.value='446.0e6'; f.stop.value='446.2e6'; f.step.value='200e3'; }
+  if(k==='TETRA'){ f.start.value='390e6'; f.stop.value='430e6'; f.step.value='2.4e6'; }
+  if(k==='LTE800'){ f.start.value='791e6'; f.stop.value='821e6'; f.step.value='2.4e6'; }
+  saveForm();
+}
+function scanPreset(p) {
+  if (p === 'FAST') { f.fft.value = '1024'; f.avg.value = '2'; f.step.value = '2.4e6'; f.samp_rate.value = '2.4e6'; f.threshold_db.value = '10'; f.guard_bins.value = '1'; f.min_width_bins.value = '2'; }
+  if (p === 'BALANCED') { f.fft.value = '4096'; f.avg.value = '8'; f.step.value = '1.2e6'; f.samp_rate.value = '2.4e6'; f.threshold_db.value = '8'; f.guard_bins.value = '1'; f.min_width_bins.value = '2'; }
+  if (p === 'FIDELITY') { f.fft.value = '16384'; f.avg.value = '32'; f.step.value = '600e3'; f.samp_rate.value = '2.4e6'; f.threshold_db.value = '6'; f.guard_bins.value = '1'; f.min_width_bins.value = '2'; }
+  saveForm();
+}
+
+// Start/Stop via webapp proxy -> controller
+f.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const body = Object.fromEntries(fd.entries());
+  const maybeNum = (k)=>{ if(body[k]!==undefined && body[k]!=='' && !isNaN(Number(body[k]))) body[k] = Number(body[k]); };
+  ['start','stop','step','samp_rate','fft','avg','threshold_db','guard_bins','min_width_bins','cfar_train','cfar_guard','cfar_quantile','cfar_alpha_db','new_ema_occ','sleep_between_sweeps','repeat'].forEach(maybeNum);
+  if(body.mode==='loop'){ body.loop = true; }
+  if(body.mode==='repeat'){ body.repeat = body.repeat||1; }
+  if(body.mode==='duration'){ /* keep duration string */ }
+  delete body.mode;
+  if(body.notify==='on'){ body.notify = true; }
+
+  const device_key = body.device_key; delete body.device_key;
+  const payload = { device_key, label: body.label || 'web', params: body };
+
+  fetch('/api/scans', { method:'POST', headers: authHeaders(), body: JSON.stringify(payload) })
+    .then(r=>r.json()).then(j=>{ setState(j.status?.state||'running'); }).catch(console.error);
+});
+document.getElementById('stopBtn')?.addEventListener('click', ()=>{
+  fetch('/api/scans/active', { method:'DELETE', headers: authHeaders() })
+    .then(()=>setState('idle')).catch(console.error);
+});
+
+// Poll status
+async function poll(){
+  try{ const r = await fetch('/api/now', {headers: authHeaders()}); const j = await r.json(); setState(j.state||'idle'); }catch(e){}
+  setTimeout(poll, 1000);
+}
+poll();
+
+// Logs
+const log = document.getElementById('log');
+async function pollLogs(){
+  try{ const r = await fetch('/api/logs'); if(r.ok){ const t = await r.text(); log.textContent = t; log.scrollTop = log.scrollHeight; } }catch(e){}
+  setTimeout(pollLogs, 1000);
+}
+pollLogs();
+</script>
+{% endblock %}

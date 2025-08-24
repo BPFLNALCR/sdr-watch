@@ -1,0 +1,108 @@
+    {% extends "base.html" %}
+    {% block content %}
+    <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div class="stat"><div class="text-xs uppercase muted">Scans</div><div class="text-2xl font-semibold">{{ scans_total }}</div></div>
+    <div class="stat"><div class="text-xs uppercase muted">Detections</div><div class="text-2xl font-semibold">{{ detections_total }}</div></div>
+    <div class="stat"><div class="text-xs uppercase muted">Baseline bins</div><div class="text-2xl font-semibold">{{ baseline_total }}</div></div>
+    <div class="stat">
+        <div class="text-xs uppercase muted">Latest scan</div>
+        {% if latest %}
+        <div class="text-sm">ID {{ latest.id }}<br/>{{ latest.t_start_utc }} → {{ latest.t_end_utc or '…' }}<br/>{{ (latest.f_start_hz/1e6)|round(3) }}–{{ (latest.f_stop_hz/1e6)|round(3) }} MHz</div>
+        {% else %}<div class="text-sm">No scans</div>{% endif %}
+    </div>
+    </section>
+
+    <section class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-6">
+    <div class="card lg:col-span-2">
+        <div class="flex items-center justify-between mb-2"><h2 class="text-lg font-semibold">SNR distribution</h2><a href="/detections" class="underline">View detections »</a></div>
+        {% if snr_stats and snr_hist %}
+        <div class="text-xs muted mb-2 flex flex-wrap gap-4">
+        <div><span class="muted">Count:</span> {{ snr_stats.count }}</div>
+        <div><span class="muted">Median:</span> {{ '%.1f' % snr_stats.p50 }} dB</div>
+        <div><span class="muted">p90:</span> {{ '%.1f' % snr_stats.p90 }} dB</div>
+        <div><span class="muted">Max:</span> {{ '%.1f' % snr_stats.p100 }} dB</div>
+        <div><span class="muted">Bucket:</span> {{ snr_bucket_db }} dB</div>
+        </div>
+        <div class="flex gap-1 items-end" style="height: {{ chart_px }}px">
+        {% for b in snr_hist %}
+            <div class="flex flex-col items-center" title="{{ b.count }} detections">
+            <div class="w-6 bar rounded-t" style="height: {{ b.height_px }}px;"></div>
+            <div class="text-[10px] muted rotate-45 origin-top-left -mt-1">{{ b.label }}</div>
+            </div>
+        {% endfor %}
+        </div>
+        {% else %}<div class="text-sm muted">No SNR data.</div>{% endif %}
+    </div>
+    <div class="card">
+        <h2 class="text-lg font-semibold mb-2">Top services</h2>
+        <ul class="space-y-1 text-sm">
+        {% for s in top_services %}
+        <li class="flex items-center justify-between"><span class="chip">{{ s.service }}</span><span class="text-slate-300">{{ s.count }}</span></li>
+        {% else %}<li class="text-slate-400">No data.</li>{% endfor %}
+        </ul>
+    </div>
+    </section>
+
+    <section class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4">
+    <div class="card lg:col-span-2">
+        <div class="flex items-center justify-between mb-2">
+        <h2 class="text-lg font-semibold">Detections by frequency (latest scan)</h2>
+        {% if latest %}<div class="text-xs muted">{{ (latest.f_start_hz/1e6)|round(3) }}–{{ (latest.f_stop_hz/1e6)|round(3) }} MHz</div>{% endif %}
+        </div>
+        {% if freq_bins and freq_bins | length > 0 %}
+        <div class="flex items-end gap-3">
+            <div class="yaxis" style="height: {{ chart_px }}px">
+            <div class="tick" style="top:-6px">{{ freq_max }}</div>
+            <div class="tick" style="top: calc(50% - 6px);">{{ (freq_max/2)|int }}</div>
+            <div class="tick" style="bottom:-6px">0</div>
+            </div>
+            <div class="ygrid" style="height: {{ chart_px }}px; width:100%">
+            <div class="mid"></div>
+            <div class="flex gap-[2px] items-end h-full">
+                {% for b in freq_bins %}
+                <div class="flex flex-col items-center" title="{{ '%.3f' % b.mhz_start }}–{{ '%.3f' % b.mhz_end }} MHz: {{ b.count }}">
+                    <div class="w-3 bar rounded-t" style="height: {{ b.height_px }}px;"></div>
+                </div>
+                {% endfor %}
+            </div>
+            </div>
+        </div>
+        {% else %}<div class="text-sm muted">No detections for the latest scan.</div>{% endif %}
+    </div>
+    <div class="card">
+        <div class="flex items-center justify-between mb-2"><h2 class="text-lg font-semibold">Strongest signals</h2><a class="underline text-xs" href="/detections?min_snr=10">filter ≥10 dB »</a></div>
+        <table class="table"><thead><tr class="text-slate-400"><th class="th">MHz</th><th class="th">SNR</th><th class="th">Service</th></tr></thead><tbody>
+        {% for r in strongest %}
+            <tr class="hover:bg-white/5"><td class="td">{{ (r.f_center_hz/1e6)|round(6) }}</td><td class="td">{{ '%.1f' % r.snr_db }}</td><td class="td"><span class="chip">{{ r.service or 'Unknown' }}</span></td></tr>
+        {% else %}<tr><td class="td" colspan="3">No detections.</td></tr>{% endfor %}
+        </tbody></table>
+    </div>
+    </section>
+
+    <section class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4">
+    <div class="card lg:col-span-2">
+        <div class="flex items-center justify-between mb-2"><h2 class="text-lg font-semibold">Detections by frequency (avg across scans)</h2>
+        {% if avg_bins and avg_bins|length>0 %}<div class="text-xs muted">{{ '%.3f' % avg_start_mhz }}–{{ '%.3f' % avg_stop_mhz }} MHz • bins={{ avg_bins|length }}</div>{% endif %}
+        </div>
+        {% if avg_bins and avg_bins | length > 0 %}
+        <div class="flex items-end gap-3">
+            <div class="yaxis" style="height: {{ chart_px }}px">
+            <div class="tick" style="top:-6px">{{ (avg_max)|round(1) }}</div>
+            <div class="tick" style="top: calc(50% - 6px);">{{ (avg_max/2)|round(1) }}</div>
+            <div class="tick" style="bottom:-6px">0</div>
+            </div>
+            <div class="ygrid" style="height: {{ chart_px }}px; width:100%">
+            <div class="mid"></div>
+            <div class="flex gap-[2px] items-end h-full">
+                {% for b in avg_bins %}
+                <div class="flex flex-col items-center" title="{{ '%.3f' % b.mhz_start }}–{{ '%.3f' % b.mhz_end }} MHz: avg {{ '%.2f' % b.count }} ({{ b.coverage }} scans)">
+                    <div class="w-3 bar rounded-t" style="height: {{ b.height_px }}px;"></div>
+                </div>
+                {% endfor %}
+            </div>
+            </div>
+        </div>
+        {% else %}<div class="text-sm muted">Not enough data to compute average across scans.</div>{% endif %}
+    </div>
+    </section>
+    {% endblock %}
